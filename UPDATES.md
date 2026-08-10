@@ -18,3 +18,14 @@
   - 结果打印 + 存 data/investing_<名称>_<时间>.json
 - 按约定未实测：选择器基于站点常规结构，首次运行解析为空时需抓
   实际 HTML 微调（代码内有说明）
+
+## v0.3.0 (2026-08-10)
+- 数据源替换：investing.com（Cloudflare 防护，requests 与 Edge 无头均 403）
+  → 东方财富公开接口（无 token、无防护，A股/美股/港股全覆盖）
+- crawler_stock.py 重写为单文件下载器：
+  输入名称/代码 → 搜索候选（suggest API）→ 多候选交互选择 →
+  下载近一年日K（kline API，前复权）→ CSV 保存到 Windows 桌面
+- CSV 列：日期/开盘/收盘/最高/最低/成交量/成交额/振幅/涨跌幅/涨跌额/换手率，
+  utf-8-sig 编码，Excel 直接打开不乱码
+- 删除 Edge CDP 内嵌脚本（不再依赖 PowerShell / Edge / spider_framework）
+- 实测：输入"茅台" → 贵州茅台 242 条日K → 桌面 CSV 生成成功
