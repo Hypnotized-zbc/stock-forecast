@@ -1,35 +1,32 @@
 # -*- coding: utf-8 -*-
 """
-crawler_stock.py — 股票历史数据下载 + HTML 图表（单文件）
-===========================================================
-输入股票名称 → 搜索候选 → 下载近一年日K → 生成自包含 HTML 图表页并打开。
+crawler_stock.py — 股票历史数据查询 + 图表（单文件 Web 应用）
+===============================================================
+启动后自动打开浏览器页面：
+    页面上方"查询股票："输入框 → 输入名称/代码 → 选择候选 →
+    在同一个页面显示 K线/MA5/BOLL/成交量/涨跌幅 图表（下拉切换）。
 
-图表（下拉列表切换，每次显示一个）：
-    1. K线图（叠加 5日/20日均线、BOLL 布林带）
-    2. 5日均线图（收盘价 + MA5）
-    3. 布林带 BOLL 图（上/中/下轨 + 区间填充）
-    4. 成交量 VOL 图
-    5. 涨跌幅柱状图
-
-数据源：东方财富公开接口（无 token、无反爬，A股/美股/港股全覆盖）。
-HTML 为单文件：内嵌数据 + 原生 Canvas 绘图，无任何外部依赖，离线可开。
+技术要点：
+- 本地 HTTP 服务（标准库 http.server，无第三方框架），绑定 127.0.0.1 随机端口
+- 页面与后端同源：浏览器 fetch /api/search、/api/kline，后端转发东财/新浪接口
+  （浏览器直连东财会被 CORS 拦，本地后端中转绕过）
+- 图表为原生 Canvas 绘制，单页面内完成查询与结果展示，不刷新跳转
+- 数据源：东方财富（主）+ 新浪（备用，东财断连自动切换）
+- 页面右下角"停止服务"可结束本地服务
 
 运行方式：
     python3 crawler_stock.py
-    程序先问"要下载哪个股票？"，再自动完成搜索、下载、生成图表并打开。
+    浏览器自动打开 http://127.0.0.1:<port>/
 
 依赖：requests（其余全用标准库 + 浏览器自带 Canvas）
 """
 import csv
 import json
-import math
-import os
-import statistics
-import subprocess
-import sys
+import threading
 import time
 import urllib.parse
 from datetime import datetime, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import requests
@@ -52,6 +49,7 @@ HEADERS = {
     "Referer": "https://quote.eastmoney.com/",
 }
 
+DATA_DIR = Path(__file__).resolve().parent / "data"
 
 # ---------------------------------------------------------------------------
 # 网络请求（带重试）
@@ -59,27 +57,27 @@ HEADERS = {
 _SESSION = requests.Session()  # 复用连接，减少被远端断开的概率
 
 
-def get_json(url, params, retries=5):
+def get_json(url, params, retries=4):
     """GET JSON，失败重试。
 
-    WSL 网络间歇抖动（东财接口偶发 RemoteDisconnected），重试 5 次、
-    指数退避，绝大多数情况能自动恢复。
+    WSL 网络间歇抖动（东财接口偶发 RemoteDisconnected），重试 4 次、
+    指数退避；总等待控制在约 30 秒内，避免浏览器端等待过久。
     """
     last_err = None
     for attempt in range(1, retries + 1):
         try:
-            resp = _SESSION.get(url, params=params, headers=HEADERS, timeout=15)
+            resp = _SESSION.get(url, params=params, headers=HEADERS, timeout=10)
             resp.raise_for_status()
             return resp.json()
         except (requests.RequestException, ValueError) as exc:
             last_err = exc
             print(f"[!] 请求失败(第{attempt}/{retries}次): {exc}")
-            time.sleep(1.5 ** attempt)  # 指数退避：2s, 3s, 5s, 8s, 12s
+            time.sleep(1.5 ** attempt)  # 指数退避：2s, 3s, 5s, 8s
     raise ConnectionError(f"接口请求失败: {url} ({last_err})")
 
 
 # ---------------------------------------------------------------------------
-# 搜索与选择
+# 搜索与K线（数据层）
 # ---------------------------------------------------------------------------
 def search_stock(name):
     """按名称/代码搜索，返回候选列表：[{名称, 代码, 市场, 分类, secid}, ...]"""
@@ -108,70 +106,6 @@ def search_stock(name):
     return uniq
 
 
-def ask_stock_name():
-    """下载前询问股票名称。"""
-    name = input("要下载哪个股票的历史数据？请输入名称或代码（如：贵州茅台 / 600519 / AAPL）：").strip()
-    while not name:
-        name = input("输入不能为空，请输入股票名称或代码：").strip()
-    return name
-
-
-def ask_date_range():
-    """询问读取时间范围；直接回车使用默认（近一年）。返回 (start, end)。
-
-    输入格式 YYYY-MM-DD，带格式与顺序校验，出错会重问。
-    """
-    today = datetime.now()
-    default_start = today - timedelta(days=365)
-    while True:
-        s = input(f"起始日期（YYYY-MM-DD，回车默认 {default_start:%Y-%m-%d}）：").strip()
-        e = input(f"结束日期（YYYY-MM-DD，回车默认 {today:%Y-%m-%d}）：").strip()
-        if s:
-            try:
-                start = datetime.strptime(s, "%Y-%m-%d")
-            except ValueError:
-                print("[!] 起始日期格式错误，请用 YYYY-MM-DD（如 2025-08-10）。")
-                continue
-        else:
-            start = default_start
-        if e:
-            try:
-                end = datetime.strptime(e, "%Y-%m-%d")
-            except ValueError:
-                print("[!] 结束日期格式错误，请用 YYYY-MM-DD（如 2026-08-10）。")
-                continue
-        else:
-            end = today
-        if start > end:
-            print("[!] 起始日期不能晚于结束日期。")
-            continue
-        return start, end
-
-
-def choose_candidate(candidates):
-    """多候选时让用户选择，返回候选 dict。"""
-    if not candidates:
-        return None
-    if len(candidates) == 1:
-        c = candidates[0]
-        print(f"[i] 找到唯一匹配：{c['名称']}（{c['代码']} {c['市场']}）")
-        return c
-    print("[i] 找到多个匹配，请选择：")
-    for i, c in enumerate(candidates[:10], 1):
-        print(f"    {i}. {c['名称']}  {c['代码']}  {c['市场']}  {c['分类']}")
-    while True:
-        try:
-            idx = int(input(f"输入序号（1-{min(10, len(candidates))}，回车默认第 1 个）：").strip() or "1")
-            if 1 <= idx <= min(10, len(candidates)):
-                return candidates[idx - 1]
-        except ValueError:
-            pass
-        print("序号无效，重新输入。")
-
-
-# ---------------------------------------------------------------------------
-# K线下载与指标计算
-# ---------------------------------------------------------------------------
 def fetch_kline(secid, start, end):
     """下载 [start, end] 区间日K，返回 (股票名, 行列表)。
 
@@ -278,6 +212,7 @@ def ma(values, n):
 
 def boll(values, n=20, k=2.0):
     """布林带：中轨 MA(n)，上下轨 = 中轨 ± k*标准差(总体)。"""
+    import statistics
     mid, up, low = [None] * len(values), [None] * len(values), [None] * len(values)
     for i in range(n - 1, len(values)):
         window = values[i - n + 1:i + 1]
@@ -308,40 +243,85 @@ def build_chart_data(rows):
     }
 
 
+def save_csv(rows):
+    """K线数据留档到 data/ 目录（每次查询自动保存一份）。"""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    path = DATA_DIR / f"kline_{datetime.now():%Y%m%d_%H%M%S}.csv"
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(CSV_COLUMNS)
+        writer.writerows(rows)
+    return path
+
+
 # ---------------------------------------------------------------------------
-# HTML 图表页生成
+# 页面模板（查询 + 结果，同一个 HTML）
 # ---------------------------------------------------------------------------
-CHART_TEMPLATE = """<!DOCTYPE html>
+INDEX_TEMPLATE = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>__NAME__ 近一年行情图表</title>
+<title>股票历史数据查询</title>
 <style>
-  body {{ font-family: "Microsoft YaHei", sans-serif; margin: 20px; background: #f7f8fa; }}
-  .header {{ max-width: 1160px; margin: 0 auto 12px; display: flex; align-items: center; gap: 16px; }}
-  h2 {{ margin: 0; font-size: 20px; color: #222; }}
-  .sub {{ color: #888; font-size: 13px; }}
-  select {{ padding: 7px 12px; font-size: 14px; border: 1px solid #ccc; border-radius: 6px; background: #fff; }}
-  .wrap {{ max-width: 1180px; margin: 0 auto; background: #fff; border-radius: 10px;
+  body { font-family: "Microsoft YaHei", sans-serif; margin: 20px; background: #f7f8fa; }
+  .header { max-width: 1180px; margin: 0 auto 12px; }
+  h2 { margin: 0 0 10px; font-size: 20px; color: #222; }
+  .query-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+               background: #fff; border-radius: 8px; padding: 12px 14px;
+               box-shadow: 0 2px 8px rgba(0,0,0,.06); }
+  .query-row label { font-size: 15px; color: #333; }
+  .query-row input[type=text] { width: 260px; padding: 7px 10px; font-size: 14px;
+               border: 1px solid #ccc; border-radius: 6px; }
+  .query-row input[type=date] { padding: 6px 8px; font-size: 13px;
+               border: 1px solid #ccc; border-radius: 6px; }
+  .query-row button { padding: 8px 18px; font-size: 14px; border: none;
+               border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; }
+  .query-row button:hover { background: #1d4ed8; }
+  .query-row button:disabled { background: #9ca3af; cursor: not-allowed; }
+  .stop-btn { margin-left: auto; font-size: 12px; color: #999; background: none;
+               border: 1px solid #ddd; border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  #candidateBox { margin-top: 8px; }
+  .cand { display: inline-block; margin: 4px 6px 0 0; padding: 6px 12px; font-size: 13px;
+          border: 1px solid #d1d5db; border-radius: 6px; background: #fff; cursor: pointer; }
+  .cand:hover { border-color: #2563eb; color: #2563eb; }
+  #status { font-size: 13px; color: #888; margin-left: 6px; }
+  .row2 { max-width: 1180px; margin: 10px auto 0; display: flex; align-items: center; gap: 16px; }
+  select { padding: 7px 12px; font-size: 14px; border: 1px solid #ccc; border-radius: 6px; background: #fff; }
+  .sub { color: #888; font-size: 13px; }
+  .wrap { max-width: 1180px; margin: 10px auto 0; background: #fff; border-radius: 10px;
           box-shadow: 0 2px 8px rgba(0,0,0,.06); padding: 12px;
-          display: flex; gap: 14px; align-items: flex-start; }}
-  .chart-col {{ flex: 1; min-width: 0; }}
-  canvas {{ display: block; cursor: crosshair; max-width: 100%; height: auto; }}
-  #tip {{ width: 260px; flex: 0 0 260px; font-size: 14px; line-height: 2.0; color: #333;
+          display: flex; gap: 14px; align-items: flex-start; }
+  .chart-col { flex: 1; min-width: 0; }
+  canvas { display: block; cursor: crosshair; max-width: 100%; height: auto; }
+  #tip { width: 260px; flex: 0 0 260px; font-size: 14px; line-height: 2.0; color: #333;
           background: #fafbfc; border-left: 3px solid #e5e7eb; padding: 12px 14px;
-          min-height: 260px; }}
-  #tip .r {{ display: flex; justify-content: space-between; }}
-  #tip .lbl {{ color: #888; }}
-  #tip .val {{ font-weight: 600; }}
-  .legend {{ font-size: 12px; color: #666; margin-top: 6px; }}
-  .legend span {{ margin-right: 14px; }}
-  .up {{ color: #e03434; }} .down {{ color: #089981; }}
+          min-height: 260px; }
+  #tip .r { display: flex; justify-content: space-between; }
+  #tip .lbl { color: #888; }
+  #tip .val { font-weight: 600; }
+  .legend { font-size: 12px; color: #666; margin-top: 6px; }
+  .legend span { margin-right: 14px; }
+  .up { color: #e03434; } .down { color: #089981; }
+  .empty { color: #bbb; text-align: center; padding: 60px 0; font-size: 14px; }
 </style>
 </head>
 <body>
 <div class="header">
-  <h2>__NAME__ 近一年行情</h2>
+  <h2>股票历史数据查询</h2>
+  <div class="query-row">
+    <label for="stockInput">查询股票：</label>
+    <input type="text" id="stockInput" placeholder="名称或代码，如：601088 / 中国神华 / 600519" autofocus>
+    <input type="date" id="startDate">
+    <span style="color:#999">~</span>
+    <input type="date" id="endDate">
+    <button id="searchBtn">查询</button>
+    <span id="status"></span>
+    <button class="stop-btn" id="stopBtn" title="结束本地服务">停止服务</button>
+  </div>
+  <div id="candidateBox"></div>
+</div>
+<div class="row2">
   <select id="chartType">
     <option value="kline">K线图（蜡烛图）</option>
     <option value="ma5">5日均线图</option>
@@ -356,73 +336,182 @@ CHART_TEMPLATE = """<!DOCTYPE html>
     <canvas id="chart"></canvas>
     <div class="legend" id="legend"></div>
   </div>
-  <div id="tip">鼠标移到图上查看每日数据</div>
+  <div id="tip">查询后鼠标移到图上查看每日数据</div>
 </div>
 <script>
 "use strict";
-const D = __DATA_JSON__;
-const n = D.dates.length;
 const UP = "#e03434", DOWN = "#089981";
 const W = 900, H = 620, PAD = {L:64, R:20, T:24, B:42};
 
 const cv = document.getElementById("chart");
 const ctx = cv.getContext("2d");
-// 高清屏适配：画布按 devicePixelRatio 放大，避免高分屏模糊
 const dpr = window.devicePixelRatio || 1;
 cv.width = W * dpr; cv.height = H * dpr;
 cv.style.width = W + "px"; cv.style.height = H + "px";
 ctx.scale(dpr, dpr);
 ctx.lineWidth = 1;
 
+let D = null;   // 图表数据，查询成功后赋值
+let n = 0;
+let currentType = "kline";
+
 const fmt = (v, d=2) => (v==null || isNaN(v)) ? "-" : Number(v).toFixed(d);
 
-function priceMinMax() {{
+function priceMinMax() {
   const lo = Math.min(...D.lows), hi = Math.max(...D.highs);
   const pad = (hi-lo)*0.06 || 1; return [lo-pad, hi+pad];
-}}
-function seriesMinMax(arr, padRatio) {{
+}
+function seriesMinMax(arr, padRatio) {
   const vals = arr.filter(v=>v!=null);
   if (!vals.length) return [0,1];
   let lo = Math.min(...vals), hi = Math.max(...vals);
   const pad = (hi-lo)*(padRatio||0.08) || 1; return [lo-pad, hi+pad];
-}}
-function xOf(i) {{ return PAD.L + i * (W-PAD.L-PAD.R) / Math.max(1,n-1); }}
-function yOf(v, mn, mx) {{ return PAD.T + (mx-v) * (H-PAD.T-PAD.B) / (mx-mn); }}
+}
+function xOf(i) { return PAD.L + i * (W-PAD.L-PAD.R) / Math.max(1,n-1); }
+function yOf(v, mn, mx) { return PAD.T + (mx-v) * (H-PAD.T-PAD.B) / (mx-mn); }
 
-function drawAxes(mn, mx, ticks) {{
+function drawAxes(mn, mx, ticks) {
   ctx.strokeStyle = "#f0f0f0"; ctx.fillStyle = "#888"; ctx.font = "12px sans-serif"; ctx.lineWidth = 1;
-  for (let t=0; t<=ticks; t++) {{
+  for (let t=0; t<=ticks; t++) {
     const v = mn + (mx-mn)*t/ticks;
     const y = yOf(v, mn, mx);
     ctx.beginPath(); ctx.moveTo(PAD.L, y); ctx.lineTo(W-PAD.R, y); ctx.stroke();
     ctx.textAlign = "right"; ctx.fillText(fmt(v), PAD.L-8, y+4);
-  }}
-  // 日期刻度：约每 30 根标一个
+  }
   ctx.textAlign = "center";
   const step = Math.ceil(n/8);
-  for (let i=0; i<n; i+=step) {{
+  for (let i=0; i<n; i+=step) {
     ctx.fillText(D.dates[i], xOf(i), H-PAD.B+18);
-  }}
-}}
+  }
+}
 
-let currentType = "kline";
-function paint(type) {{
+// ---- K线（纯蜡烛，不叠加指标） ----
+function drawKline() {
+  const [mn, mx] = priceMinMax();
+  drawAxes(mn, mx, 5);
+  const bw = Math.max(1.5, (W-PAD.L-PAD.R)/n*0.68);
+  for (let i=0; i<n; i++) {
+    const up = D.closes[i] >= D.opens[i];
+    ctx.strokeStyle = ctx.fillStyle = up ? UP : DOWN;
+    const x = xOf(i);
+    ctx.lineWidth = 1; ctx.beginPath();
+    ctx.moveTo(x, yOf(D.highs[i],mn,mx)); ctx.lineTo(x, yOf(D.lows[i],mn,mx)); ctx.stroke();
+    const yO = yOf(D.opens[i],mn,mx), yC = yOf(D.closes[i],mn,mx);
+    const y1 = Math.min(yO,yC), h1 = Math.max(1, Math.abs(yC-yO));
+    ctx.fillRect(x-bw/2, y1, bw, h1);
+  }
+  legend("<span><i style='color:"+UP+"'>■</i> 涨</span>"+
+         "<span><i style='color:"+DOWN+"'>■</i> 跌</span>");
+}
+
+// ---- 5日均线图 ----
+function drawMA5() {
+  const arrs = [["收盘", D.closes, "#6b7280", 1.0], ["MA5", D.ma5, "#3b82f6", 2.0]];
+  const [mn, mx] = seriesMinMax([...D.closes, ...D.ma5.filter(v=>v!=null)], 0.06);
+  drawAxes(mn, mx, 5);
+  for (const [nm, arr, color, lw] of arrs) {
+    ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.beginPath();
+    let started = false;
+    for (let i=0; i<n; i++) {
+      if (arr[i]==null) { started = false; continue; }
+      const x = xOf(i), y = yOf(arr[i], mn, mx);
+      started ? ctx.lineTo(x,y) : ctx.moveTo(x,y);
+      started = true;
+    }
+    ctx.stroke();
+  }
+  legend("<span><i style='color:#6b7280'>—</i> 收盘价</span><span><i style='color:#3b82f6'>—</i> MA5</span>");
+}
+
+// ---- BOLL 布林带 ----
+function drawBOLL() {
+  const vals = [...D.boll_up.filter(v=>v!=null), ...D.boll_low.filter(v=>v!=null)];
+  const [mn, mx] = seriesMinMax(vals, 0.05);
+  drawAxes(mn, mx, 5);
+  ctx.fillStyle = "rgba(59,130,246,0.10)"; ctx.beginPath();
+  let started = false;
+  for (let i=0; i<n; i++) {
+    if (D.boll_up[i]==null) { started=false; continue; }
+    const x=xOf(i), y=yOf(D.boll_up[i],mn,mx);
+    started ? ctx.lineTo(x,y) : ctx.moveTo(x,y); started=true;
+  }
+  for (let i=n-1; i>=0; i--) {
+    if (D.boll_low[i]==null) continue;
+    ctx.lineTo(xOf(i), yOf(D.boll_low[i],mn,mx));
+  }
+  ctx.closePath(); ctx.fill();
+  const lines = [["BOLL上", D.boll_up, "#e03434"], ["BOLL中", D.boll_mid, "#9ca3af"],
+                 ["BOLL下", D.boll_low, "#089981"]];
+  for (const [nm, arr, color] of lines) {
+    ctx.strokeStyle = color; ctx.lineWidth = 1.2; ctx.beginPath();
+    let started=false;
+    for (let i=0; i<n; i++) {
+      if (arr[i]==null) { started=false; continue; }
+      const x=xOf(i), y=yOf(arr[i],mn,mx);
+      started ? ctx.lineTo(x,y) : ctx.moveTo(x,y); started=true;
+    }
+    ctx.stroke();
+  }
+  legend("<span><i style='color:#e03434'>—</i> 上轨</span><span><i style='color:#9ca3af'>—</i> 中轨(MA20)</span><span><i style='color:#089981'>—</i> 下轨</span>");
+}
+
+// ---- 成交量 ----
+function drawVol() {
+  const [mn, mx] = seriesMinMax(D.vols, 0.05);
+  drawAxes(mn, mx, 4);
+  const bw = Math.max(1.2, (W-PAD.L-PAD.R)/n*0.6);
+  for (let i=0; i<n; i++) {
+    const up = D.closes[i] >= D.opens[i];
+    ctx.fillStyle = up ? UP : DOWN;
+    const y = yOf(D.vols[i], mn, mx);
+    ctx.fillRect(xOf(i)-bw/2, y, bw, Math.max(1, H-PAD.B-y));
+  }
+  legend("<span><i style='color:"+UP+"'>■</i> 阳线量</span><span><i style='color:"+DOWN+"'>■</i> 阴线量</span><span>单位：手</span>");
+}
+
+// ---- 涨跌幅 ----
+function drawChange() {
+  const [mn, mx] = seriesMinMax(D.changes, 0.15);
+  const lo = Math.min(mn, 0), hi = Math.max(mx, 0);
+  drawAxes(lo, hi, 5);
+  const y0 = yOf(0, lo, hi);
+  ctx.strokeStyle = "#999"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(PAD.L, y0); ctx.lineTo(W-PAD.R, y0); ctx.stroke();
+  const bw = Math.max(1.2, (W-PAD.L-PAD.R)/n*0.6);
+  for (let i=0; i<n; i++) {
+    ctx.fillStyle = D.changes[i] >= 0 ? UP : DOWN;
+    const y = yOf(D.changes[i], lo, hi);
+    const y1 = Math.min(y, y0), h1 = Math.max(1, Math.abs(y-y0));
+    ctx.fillRect(xOf(i)-bw/2, y1, bw, h1);
+  }
+  legend("<span><i style='color:"+UP+"'>■</i> 上涨</span><span><i style='color:"+DOWN+"'>■</i> 下跌</span><span>单位：%</span>");
+}
+
+function legend(html) { document.getElementById("legend").innerHTML = html; }
+
+function paint(type) {
   ctx.clearRect(0, 0, W, H);
+  if (!D || !n) {
+    ctx.fillStyle = "#bbb"; ctx.font = "14px sans-serif"; ctx.textAlign = "center";
+    ctx.fillText("请先在上方输入股票名称查询", W/2, H/2);
+    return;
+  }
   if (type=="kline") drawKline();
   else if (type=="ma5") drawMA5();
   else if (type=="boll") drawBOLL();
   else if (type=="vol") drawVol();
   else drawChange();
-}}
-function drawCrosshair(i) {{
+}
+function drawCrosshair(i) {
   const x = xOf(i);
   ctx.strokeStyle = "rgba(0,0,0,0.22)"; ctx.lineWidth = 1;
   ctx.setLineDash([4, 4]);
   ctx.beginPath(); ctx.moveTo(x, PAD.T); ctx.lineTo(x, H-PAD.B); ctx.stroke();
   ctx.setLineDash([]);
-}}
-function drawTooltip() {{
-  cv.onmousemove = e => {{
+}
+function drawTooltip() {
+  cv.onmousemove = e => {
+    if (!D || !n) return;
     const rect = cv.getBoundingClientRect();
     const px = (e.clientX-rect.left) * W / rect.width;
     const i = Math.round((px-PAD.L) * Math.max(1,n-1) / (W-PAD.L-PAD.R));
@@ -444,214 +533,199 @@ function drawTooltip() {{
       row("BOLL上", fmt(D.boll_up[i])) +
       row("BOLL中", fmt(D.boll_mid[i])) +
       row("BOLL下", fmt(D.boll_low[i]));
-  }};
-}}
+  };
+}
 
-function legend(html) {{ document.getElementById("legend").innerHTML = html; }}
+// ---- 查询流程 ----
+function setStatus(msg) { document.getElementById("status").textContent = msg; }
 
-// ---- K线（纯蜡烛，不叠加指标） ----
-function drawKline() {{
-  const [mn, mx] = priceMinMax();
-  drawAxes(mn, mx, 5);
-  const bw = Math.max(1.5, (W-PAD.L-PAD.R)/n*0.68);
-  for (let i=0; i<n; i++) {{
-    const up = D.closes[i] >= D.opens[i];
-    ctx.strokeStyle = ctx.fillStyle = up ? UP : DOWN;
-    const x = xOf(i);
-    // 影线
-    ctx.lineWidth = 1; ctx.beginPath();
-    ctx.moveTo(x, yOf(D.highs[i],mn,mx)); ctx.lineTo(x, yOf(D.lows[i],mn,mx)); ctx.stroke();
-    // 实体
-    const yO = yOf(D.opens[i],mn,mx), yC = yOf(D.closes[i],mn,mx);
-    const y1 = Math.min(yO,yC), h1 = Math.max(1, Math.abs(yC-yO));
-    ctx.fillRect(x-bw/2, y1, bw, h1);
-  }}
-  legend("<span><i style='color:"+UP+"'>■</i> 涨</span>"+
-         "<span><i style='color:"+DOWN+"'>■</i> 跌</span>");
-}}
+async function doSearch() {
+  const q = document.getElementById("stockInput").value.trim();
+  if (!q) { setStatus("请输入股票名称或代码"); return; }
+  const box = document.getElementById("candidateBox");
+  box.innerHTML = "";
+  const btn = document.getElementById("searchBtn");
+  btn.disabled = true;
+  setStatus("搜索中...");
+  try {
+    const resp = await fetch("/api/search?q=" + encodeURIComponent(q));
+    const data = await resp.json();
+    if (data.error) { setStatus("搜索失败: " + data.error); return; }
+    if (!data.length) { setStatus("未找到该股票"); return; }
+    box.innerHTML = data.map((c, i) =>
+      "<button class='cand' data-i='" + i + "'>" + c["名称"] + " " + c["代码"] + " " + c["市场"] + "</button>"
+    ).join("");
+    window._cands = data;
+    setStatus("找到 " + data.length + " 个候选，点选一个：");
+  } catch (e) {
+    setStatus("请求异常: " + e);
+  } finally {
+    btn.disabled = false;
+  }
+}
 
-// ---- 5日均线图 ----
-function drawMA5() {{
-  const arrs = [["收盘", D.closes, "#6b7280", 1.0], ["MA5", D.ma5, "#3b82f6", 2.0]];
-  const [mn, mx] = seriesMinMax([...D.closes, ...D.ma5.filter(v=>v!=null)], 0.06);
-  drawAxes(mn, mx, 5);
-  for (const [nm, arr, color, lw] of arrs) {{
-    ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.beginPath();
-    let started = false;
-    for (let i=0; i<n; i++) {{
-      if (arr[i]==null) {{ started = false; continue; }}
-      const x = xOf(i), y = yOf(arr[i], mn, mx);
-      started ? ctx.lineTo(x,y) : ctx.moveTo(x,y);
-      started = true;
-    }}
-    ctx.stroke();
-  }}
-  legend("<span><i style='color:#6b7280'>—</i> 收盘价</span><span><i style='color:#3b82f6'>—</i> MA5</span>");
-}}
+async function doKline(idx) {
+  const c = window._cands[idx];
+  const s = document.getElementById("startDate").value;
+  const e = document.getElementById("endDate").value;
+  setStatus("下载 " + c["名称"] + " 数据中（约需 10~30 秒）...");
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 90000);
+  try {
+    const resp = await fetch("/api/kline?secid=" + encodeURIComponent(c.secid) +
+                             "&start=" + s + "&end=" + e, {signal: ctrl.signal});
+    const data = await resp.json();
+    if (data.error) { setStatus("下载失败: " + data.error); return; }
+    D = data;
+    n = D.dates.length;
+    document.getElementById("rangeInfo").textContent =
+      (data.name || c["名称"]) + " | " + D.dates[0] + " ~ " + D.dates[n-1] + " | 共 " + n + " 个交易日";
+    document.getElementById("tip").innerHTML = "鼠标移到图上查看每日数据";
+    document.getElementById("candidateBox").innerHTML = "";
+    setStatus("完成");
+    paint(currentType);
+  } catch (err) {
+    setStatus("请求异常或超时: " + err);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
-// ---- BOLL 布林带 ----
-function drawBOLL() {{
-  const vals = [...D.boll_up.filter(v=>v!=null), ...D.boll_low.filter(v=>v!=null)];
-  const [mn, mx] = seriesMinMax(vals, 0.05);
-  drawAxes(mn, mx, 5);
-  // 区间填充
-  ctx.fillStyle = "rgba(59,130,246,0.10)"; ctx.beginPath();
-  let started = false;
-  for (let i=0; i<n; i++) {{
-    if (D.boll_up[i]==null) {{ started=false; continue; }}
-    const x=xOf(i), y=yOf(D.boll_up[i],mn,mx);
-    started ? ctx.lineTo(x,y) : ctx.moveTo(x,y); started=true;
-  }}
-  for (let i=n-1; i>=0; i--) {{
-    if (D.boll_low[i]==null) continue;
-    ctx.lineTo(xOf(i), yOf(D.boll_low[i],mn,mx));
-  }}
-  ctx.closePath(); ctx.fill();
-  const lines = [["BOLL上", D.boll_up, "#e03434"], ["BOLL中", D.boll_mid, "#9ca3af"],
-                 ["BOLL下", D.boll_low, "#089981"]];
-  for (const [nm, arr, color] of lines) {{
-    ctx.strokeStyle = color; ctx.lineWidth = 1.2; ctx.beginPath();
-    let started=false;
-    for (let i=0; i<n; i++) {{
-      if (arr[i]==null) {{ started=false; continue; }}
-      const x=xOf(i), y=yOf(arr[i],mn,mx);
-      started ? ctx.lineTo(x,y) : ctx.moveTo(x,y); started=true;
-    }}
-    ctx.stroke();
-  }}
-  legend("<span><i style='color:#e03434'>—</i> 上轨</span><span><i style='color:#9ca3af'>—</i> 中轨(MA20)</span><span><i style='color:#089981'>—</i> 下轨</span>");
-}}
-
-// ---- 成交量 ----
-function drawVol() {{
-  const [mn, mx] = seriesMinMax(D.vols, 0.05);
-  drawAxes(mn, mx, 4);
-  const bw = Math.max(1.2, (W-PAD.L-PAD.R)/n*0.6);
-  for (let i=0; i<n; i++) {{
-    const up = D.closes[i] >= D.opens[i];
-    ctx.fillStyle = up ? UP : DOWN;
-    const y = yOf(D.vols[i], mn, mx);
-    ctx.fillRect(xOf(i)-bw/2, y, bw, Math.max(1, H-PAD.B-y));
-  }}
-  legend("<span><i style='color:"+UP+"'>■</i> 阳线量</span><span><i style='color:"+DOWN+"'>■</i> 阴线量</span><span>单位：手</span>");
-}}
-
-// ---- 涨跌幅 ----
-function drawChange() {{
-  const [mn, mx] = seriesMinMax(D.changes, 0.15);
-  // 让 0 轴可见：若区间不含 0，扩展
-  const lo = Math.min(mn, 0), hi = Math.max(mx, 0);
-  drawAxes(lo, hi, 5);
-  const y0 = yOf(0, lo, hi);
-  ctx.strokeStyle = "#999"; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(PAD.L, y0); ctx.lineTo(W-PAD.R, y0); ctx.stroke();
-  const bw = Math.max(1.2, (W-PAD.L-PAD.R)/n*0.6);
-  for (let i=0; i<n; i++) {{
-    ctx.fillStyle = D.changes[i] >= 0 ? UP : DOWN;
-    const y = yOf(D.changes[i], lo, hi);
-    const y1 = Math.min(y, y0), h1 = Math.max(1, Math.abs(y-y0));
-    ctx.fillRect(xOf(i)-bw/2, y1, bw, h1);
-  }}
-  legend("<span><i style='color:"+UP+"'>■</i> 上涨</span><span><i style='color:"+DOWN+"'>■</i> 下跌</span><span>单位：%</span>");
-}}
-
+document.getElementById("candidateBox").addEventListener("click", e => {
+  const b = e.target.closest(".cand");
+  if (b) doKline(Number(b.dataset.i));
+});
+document.getElementById("searchBtn").addEventListener("click", doSearch);
+document.getElementById("stockInput").addEventListener("keydown", e => {
+  if (e.key === "Enter") doSearch();
+});
 document.getElementById("chartType").addEventListener("change", e => {
   currentType = e.target.value;
   paint(currentType);
 });
-document.getElementById("rangeInfo").textContent =
-  D.dates[0] + " ~ " + D.dates[n-1] + " | 共 " + n + " 个交易日";
-drawTooltip();
-paint(currentType);
+document.getElementById("stopBtn").addEventListener("click", () => {
+  fetch("/api/shutdown").catch(()=>{});
+  setStatus("服务已停止，可关闭本页");
+});
+
+// 初始化：默认时间范围为近一年
+(function () {
+  const now = new Date();
+  const fmtDate = d => d.toISOString().slice(0,10);
+  document.getElementById("endDate").value = fmtDate(now);
+  const d = new Date(now); d.setFullYear(d.getFullYear()-1);
+  document.getElementById("startDate").value = fmtDate(d);
+  drawTooltip();
+  paint(currentType);
+})();
 </script>
 </body>
 </html>
 """
 
 
-def build_chart_html(stock_name, rows):
-    """生成自包含 HTML 图表页内容。"""
-    data = build_chart_data(rows)
-    # 模板里 {{ }} 是预留转义，输出时统一转回单花括号
-    html = (CHART_TEMPLATE
-            .replace("{{", "{")
-            .replace("}}", "}")
-            .replace("__NAME__", stock_name)
-            .replace("__DATA_JSON__", json.dumps(data, ensure_ascii=False)))
-    return html
-
-
 # ---------------------------------------------------------------------------
-# 输出与打开
+# 本地 HTTP 服务
 # ---------------------------------------------------------------------------
-def save_csv(rows, out_dir):
-    """写 CSV 留档（项目 data/ 目录，不再放桌面）。返回文件路径。"""
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"kline_{datetime.now():%Y%m%d_%H%M%S}.csv"
-    with open(path, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.writer(f)
-        writer.writerow(CSV_COLUMNS)
-        writer.writerows(rows)
-    return path
+class Handler(BaseHTTPRequestHandler):
+    """查询页 + JSON API。浏览器与后端同源，后端中转东财/新浪。"""
+
+    def log_message(self, fmt, *args):  # 静默访问日志
+        pass
+
+    def _send(self, code, content_type, body):
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass  # 客户端提前断开（如刷新/关页），静默忽略
+
+    def _send_json(self, obj, code=200):
+        self._send(code, "application/json; charset=utf-8",
+                   json.dumps(obj, ensure_ascii=False).encode("utf-8"))
+
+    def _send_html(self, text):
+        self._send(200, "text/html; charset=utf-8", text.encode("utf-8"))
+
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        params = urllib.parse.parse_qs(parsed.query)
+
+        try:
+            if path == "/":
+                self._send_html(INDEX_TEMPLATE)
+            elif path == "/api/search":
+                q = (params.get("q") or [""])[0].strip()
+                if not q:
+                    self._send_json({"error": "缺少参数 q"}, 400)
+                    return
+                self._send_json(search_stock(q))
+            elif path == "/api/kline":
+                secid = (params.get("secid") or [""])[0].strip()
+                start = (params.get("start") or [""])[0].strip()
+                end = (params.get("end") or [""])[0].strip()
+                if not secid or not start or not end:
+                    self._send_json({"error": "缺少参数 secid/start/end"}, 400)
+                    return
+                try:
+                    s = datetime.strptime(start, "%Y-%m-%d")
+                    e = datetime.strptime(end, "%Y-%m-%d")
+                except ValueError:
+                    self._send_json({"error": "日期格式错误，应为 YYYY-MM-DD"}, 400)
+                    return
+                name, rows = fetch_kline(secid, s, e)
+                if not rows:
+                    self._send_json({"error": "未获取到K线数据"}, 404)
+                    return
+                data = build_chart_data(rows)
+                data["name"] = name
+                try:
+                    save_csv(rows)  # 留档，失败不影响响应
+                except Exception:
+                    pass
+                self._send_json(data)
+            elif path == "/api/shutdown":
+                self._send_json({"ok": True})
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
+            else:
+                self._send_json({"error": "404 Not Found"}, 404)
+        except ConnectionError as exc:
+            self._send_json({"error": f"数据源请求失败: {exc}"}, 502)
+        except Exception as exc:
+            self._send_json({"error": f"服务器错误: {exc}"}, 500)
 
 
-def open_in_browser(html_path):
-    """用 Windows 默认浏览器打开本地 HTML（经 WSL UNC 路径）。"""
+def open_browser(url):
+    """用 Windows 默认浏览器打开本地地址。"""
     try:
-        win = subprocess.run(["wslpath", "-w", str(html_path)],
-                             capture_output=True, text=True, timeout=10)
-        unc = win.stdout.strip()
-        subprocess.Popen(["explorer.exe", unc])
-        print(f"[i] 已在浏览器打开：{unc}")
+        import subprocess
+        subprocess.Popen(["explorer.exe", url])
     except Exception as exc:
-        print(f"[!] 自动打开失败（可手动打开）：{html_path} ({exc})")
+        print(f"[!] 自动打开浏览器失败，请手动访问: {url} ({exc})")
 
 
-# ---------------------------------------------------------------------------
-# 主流程
-# ---------------------------------------------------------------------------
 def main():
     print("=" * 56)
-    print("股票历史数据图表生成器（近一年 · 东方财富数据源）")
+    print("股票历史数据查询（浏览器界面 · 东方财富/新浪数据源）")
     print("=" * 56)
 
-    name = ask_stock_name()
-
-    # 1. 搜索
-    print(f"[i] 正在搜索: {name} ...")
-    candidates = search_stock(name)
-    if not candidates:
-        print(f"[x] 未找到股票「{name}」，请检查名称/代码后重试。")
-        sys.exit(1)
-
-    # 2. 选择目标
-    chosen = choose_candidate(candidates)
-    if not chosen:
-        sys.exit(1)
-    print(f"[i] 已选择：{chosen['名称']}（{chosen['代码']}）")
-
-    # 3. 下载日K（时间范围可自定义，默认近一年）
-    print("[i] 请设置数据时间范围（直接回车用默认）：")
-    start, end = ask_date_range()
-    print(f"[i] 下载区间: {start:%Y-%m-%d} ~ {end:%Y-%m-%d} ...")
-    stock_name, rows = fetch_kline(chosen["secid"], start, end)
-    if not rows:
-        print("[x] 未获取到K线数据（股票可能已退市或无交易记录）。")
-        sys.exit(1)
-    print(f"[i] 获取 {len(rows)} 条日K，最新: {rows[-1][0]} 收盘 {rows[-1][2]}")
-
-    # 4. CSV 留档（data/ 目录）
-    data_dir = Path(__file__).resolve().parent / "data"
-    csv_path = save_csv(rows, data_dir)
-    print(f"[i] CSV 留档：{csv_path}")
-
-    # 5. 生成 HTML 图表并打开
-    title = f"{stock_name or chosen['名称']} ({chosen['代码']})"
-    html = build_chart_html(title, rows)
-    html_path = data_dir / f"chart_{datetime.now():%Y%m%d_%H%M%S}.html"
-    html_path.write_text(html, encoding="utf-8")
-    print(f"[i] 图表页：{html_path}")
-    open_in_browser(html_path)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True  # 请求线程守护化，客户端断开不拖垮进程
+    port = server.server_address[1]
+    url = f"http://127.0.0.1:{port}/"
+    print(f"[i] 服务已启动: {url}")
+    print(f"[i] 浏览器已自动打开，页面上方输入股票名称查询")
+    print(f"[i] 按 Ctrl+C 或页面右下角「停止服务」结束")
+    open_browser(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\n[i] 服务已停止")
 
 
 if __name__ == "__main__":
