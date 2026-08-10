@@ -604,7 +604,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
                border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; }
   .query-row button:hover { background: #1d4ed8; }
   .query-row button:disabled { background: #9ca3af; cursor: not-allowed; }
-  .tabs { margin-bottom: 10px; }
+  .tabs { max-width: 1180px; margin: 0 auto 10px; }
   .tab { padding: 7px 18px; font-size: 14px; border: 1px solid #d1d5db; background: #fff;
          border-radius: 6px 6px 0 0; cursor: pointer; margin-right: 4px; }
   .tab.active { background: #2563eb; color: #fff; border-color: #2563eb; }
@@ -980,12 +980,10 @@ function drawFuture() {
     fctx.fillText(dt, xF(i), H - padB + 18);
   }
 
-  // 现价基准线（黑色虚线，醒目）
+  // 现价基准线（黑色虚线，不标文字避免遮挡）
   fctx.strokeStyle = "#111827"; fctx.lineWidth = 1.6; fctx.setLineDash([6, 4]);
   fctx.beginPath(); fctx.moveTo(padL, yOf(lastClose)); fctx.lineTo(W - padR, yOf(lastClose)); fctx.stroke();
   fctx.setLineDash([]);
-  fctx.fillStyle = "#111827"; fctx.font = "bold 13px sans-serif"; fctx.textAlign = "left";
-  fctx.fillText("现价 " + lastClose.toFixed(2), padL + 6, yOf(lastClose) - 6);
 
   // 预测线（模型线：细线 + 小圆点，无数值标注避免拥挤）
   for (const [nm, mo, col] of models) {
@@ -1027,12 +1025,6 @@ function drawFuture() {
     fctx.strokeStyle = "#fff"; fctx.lineWidth = 1.5; fctx.stroke();
     fctx.fillStyle = "#111827"; fctx.textAlign = "center";
     fctx.fillText(wp[i].toFixed(2), x, y - 12);
-  }
-  if (wp[m-1] != null) {
-    const x = xF(m-1), y = yOf(wp[m-1]);
-    fctx.font = "bold 15px sans-serif"; fctx.fillStyle = "#111827";
-    fctx.textAlign = "center";
-    fctx.fillText("最终 " + wp[m-1].toFixed(2), x, y + 26);
   }
 }
 
