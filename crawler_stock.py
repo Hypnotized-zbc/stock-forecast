@@ -683,102 +683,39 @@ function drawChange() {
   legend("<span><i style='color:"+UP+"'>■</i> 上涨</span><span><i style='color:"+DOWN+"'>■</i> 下跌</span><span>单位：%</span>");
 }
 
-// ---- 模型拟合图（真实收盘 + ARIMA + ETS + 未来5日预测）----
+// ---- 模型拟合图（真实收盘 + ARIMA + ETS）----
 const FIT_COLORS = {arima: "#dc2626", ets: "#16a34a"};
-
-function drawAxesFit(mn, mx, ticks, xF, m) {
-  ctx.strokeStyle = "#f0f0f0"; ctx.fillStyle = "#888"; ctx.font = "12px sans-serif"; ctx.lineWidth = 1;
-  for (let t=0; t<=ticks; t++) {
-    const v = mn + (mx-mn)*t/ticks;
-    const y = yOf(v, mn, mx);
-    ctx.beginPath(); ctx.moveTo(PAD.L, y); ctx.lineTo(W-PAD.R, y); ctx.stroke();
-    ctx.textAlign = "right"; ctx.fillText(fmt(v), PAD.L-8, y+4);
-  }
-  ctx.textAlign = "center";
-  const step = Math.ceil(n/8);
-  for (let i=0; i<n; i+=step) {
-    ctx.fillText(D.dates[i], xF(i), H-PAD.B+18);
-  }
-  // 未来 5 个日期标签（MM-DD，避免拥挤）
-  if (m > n && D.fit && D.fit.arima && D.fit.arima.predict_dates) {
-    for (let j=0; j<5; j++) {
-      const dt = D.fit.arima.predict_dates[j] ? D.fit.arima.predict_dates[j].slice(5) : ("+"+(j+1));
-      ctx.fillText(dt, xF(n+j), H-PAD.B+18);
-    }
-  }
-}
 
 function drawFit() {
   ctx.clearRect(0, 0, W, H);  // 先清空画布，避免残留上一张图（如 K 线）
   if (!D || !n) { paint(currentType); return; }
-  // 未来 5 个点（若任一模型有预测）
-  const future = (D.fit && D.fit.arima && D.fit.arima.predict) ? 5 : 0;
-  const m = n + future;
-  const xF = i => PAD.L + i * (W-PAD.L-PAD.R) / Math.max(1, m-1);
-
   const series = [["真实收盘", D.closes, "#111827", 2.0]];
-  const dashSeries = [];
   let all = [...D.closes];
   if (D.fit) {
     for (const k of ["arima", "ets"]) {
       if (D.fit[k]) {
         series.push([D.fit[k].name, D.fit[k].values, FIT_COLORS[k], 1.6]);
         all = all.concat(D.fit[k].values.filter(v=>v!=null));
-        if (D.fit[k].predict) {
-          dashSeries.push([D.fit[k].name+"预测", D.fit[k].predict, FIT_COLORS[k]]);
-          all = all.concat(D.fit[k].predict);
-        }
       }
     }
   }
   const [mn, mx] = seriesMinMax(all, 0.06);
-  drawAxesFit(mn, mx, 5, xF, m);
-
-  // 未来区背景 + 分隔线 + 标注
-  if (future) {
-    const x0 = xF(n - 0.5);
-    ctx.fillStyle = "rgba(0,0,0,0.035)";
-    ctx.fillRect(x0, PAD.T, W - PAD.R - x0, H - PAD.T - PAD.B);
-    ctx.strokeStyle = "#b0b0b0"; ctx.setLineDash([4,4]); ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(x0, PAD.T); ctx.lineTo(x0, H-PAD.B); ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = "#999"; ctx.font = "12px sans-serif"; ctx.textAlign = "left";
-    ctx.fillText("未来5日预测", x0 + 8, PAD.T + 14);
-  }
-
-  // 历史拟合线（实线）
+  drawAxes(mn, mx, 5);
   for (const [nm, arr, color, lw] of series) {
     ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.beginPath();
     let started = false;
     for (let i=0; i<n; i++) {
       if (arr[i]==null) { started = false; continue; }
-      const x = xF(i), y = yOf(arr[i], mn, mx);
+      const x = xOf(i), y = yOf(arr[i], mn, mx);
       started ? ctx.lineTo(x,y) : ctx.moveTo(x,y);
       started = true;
     }
     ctx.stroke();
   }
-  // 未来预测（虚线，从最后拟合点连出）
-  for (const [nm, arr, color] of dashSeries) {
-    ctx.strokeStyle = color; ctx.lineWidth = 1.6; ctx.setLineDash([6,4]);
-    ctx.beginPath();
-    let started = false;
-    for (let j=0; j<arr.length; j++) {
-      const x = xF(n+j), y = yOf(arr[j], mn, mx);
-      started ? ctx.lineTo(x,y) : ctx.moveTo(x,y);
-      started = true;
-    }
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
-
   let lg = "<span><i style='color:#111827'>—</i> 真实收盘</span>";
   if (D.fit) {
     for (const k of ["arima", "ets"]) {
-      if (D.fit[k]) {
-        lg += "<span><i style='color:"+FIT_COLORS[k]+"'>—</i> "+D.fit[k].name+"</span>" +
-              "<span><i style='color:"+FIT_COLORS[k]+"'>┅</i> "+D.fit[k].name+"预测</span>";
-      }
+      if (D.fit[k]) lg += "<span><i style='color:"+FIT_COLORS[k]+"'>—</i> "+D.fit[k].name+"</span>";
     }
   }
   legend(lg);
@@ -1192,7 +1129,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 data = build_chart_data(rows)
                 data["name"] = name
-                # 三种模型拟合 + 未来5日预测（纯 numpy，无外部依赖）
+                # 三种模型拟合 + 未来10日预测（纯 Python，零第三方依赖）
                 data["fit"] = compute_fits([float(r[2]) for r in rows],
                                            [r[0] for r in rows])
                 try:
