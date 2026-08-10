@@ -770,13 +770,25 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   .qb-refresh { border: 1px solid #d1d5db; background: #fff; border-radius: 6px;
                 padding: 3px 8px; font-size: 14px; cursor: pointer; color: #555; }
   .qb-refresh:hover { border-color: #2563eb; color: #2563eb; }
-  .wl-bar { max-width: 1180px; margin: 8px auto 0; display: flex; flex-wrap: wrap; gap: 8px; }
-  .wl-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px;
-             background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 16px;
-             font-size: 13px; color: #3730a3; cursor: pointer; }
-  .wl-chip:hover { background: #e0e7ff; }
-  .wl-chip .x { color: #a5b4fc; font-weight: 700; padding: 0 2px; }
-  .wl-chip .x:hover { color: #dc2626; }
+  .wl-bar { max-width: 1180px; margin: 8px auto 0; background: #fff; border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,.06); padding: 10px 14px; }
+  .wl-head { font-size: 13px; color: #999; margin-bottom: 6px; }
+  .wl-row { display: flex; align-items: center; gap: 14px; padding: 7px 4px;
+            border-top: 1px solid #f0f0f0; cursor: pointer; font-size: 13px; }
+  .wl-row:first-of-type { border-top: none; }
+  .wl-row:hover { background: #f8fafc; }
+  .wl-name { width: 150px; font-weight: 600; color: #111827; }
+  .wl-name b { color: #999; font-weight: 400; margin-left: 4px; }
+  .wl-price { width: 72px; font-weight: 700; font-size: 15px; }
+  .wl-chg { width: 72px; }
+  .wl-prev { width: 62px; color: #555; }
+  .wl-vol { width: 92px; color: #555; }
+  .wl-amt { width: 92px; color: #555; }
+  .wl-pe { width: 62px; color: #555; }
+  .wl-pb { width: 62px; color: #555; }
+  .wl-cap { width: 92px; color: #555; }
+  .wl-x { margin-left: auto; color: #a5b4fc; font-weight: 700; padding: 0 6px; }
+  .wl-x:hover { color: #dc2626; }
   .wl-empty { color: #bbb; font-size: 13px; padding: 4px 2px; }
   #status { font-size: 13px; color: #888; margin-left: 6px; }
   .row2 { max-width: 1180px; margin: 10px auto 0; display: flex; align-items: center; gap: 16px; }
@@ -1572,22 +1584,36 @@ function setChartData(data, name, secid) {
 function saveWatch() { try { localStorage.setItem("wl", JSON.stringify(_watch)); } catch (e) {} }
 function renderWatchlist() {
   const bar = document.getElementById("watchlist");
-  if (!_watch.length) { bar.innerHTML = "<span class='wl-empty'>自选股（查询候选旁点 ＋ 添加）</span>"; return; }
-  bar.innerHTML = _watch.map(w =>
-    "<span class='wl-chip' data-secid='"+w.secid+"'><span>"+w.name+" "+w.code+"</span><span class='pr'></span><span class='x' data-rm='"+w.secid+"'>×</span></span>"
+  if (!_watch.length) { bar.innerHTML = "<div class='wl-empty'>自选股（查询候选旁点 ＋ 添加）</div>"; return; }
+  bar.innerHTML = "<div class='wl-head'>自选股实时行情（每30秒统一刷新）</div>" + _watch.map(w =>
+    "<div class='wl-row' data-secid='"+w.secid+"'>" +
+      "<span class='wl-name'>"+w.name+" <b>"+w.code+"</b></span>" +
+      "<span class='wl-price'>—</span><span class='wl-chg'>—</span>" +
+      "<span class='wl-prev'>—</span><span class='wl-vol'>—</span>" +
+      "<span class='wl-amt'>—</span><span class='wl-pe'>—</span>" +
+      "<span class='wl-pb'>—</span><span class='wl-cap'>—</span>" +
+      "<span class='wl-x' data-rm='"+w.secid+"'>×</span>" +
+    "</div>"
   ).join("");
   renderWatchQuotes(_watchQuotes);
 }
 function renderWatchQuotes(map) {
-  for (const chip of document.querySelectorAll(".wl-chip")) {
-    const q = map[chip.dataset.secid];
-    const el = chip.querySelector(".pr");
-    if (!el) continue;
-    if (!q || q.price == null) { el.textContent = ""; continue; }
+  for (const row of document.querySelectorAll(".wl-row")) {
+    const q = map[row.dataset.secid];
+    if (!q || q.price == null) continue;
     const up = q.change_pct >= 0;
     const color = up ? UP : DOWN;
-    el.innerHTML = "<b style='color:"+color+";font-weight:700'>"+q.price.toFixed(2)+"</b>" +
-                   " <span style='color:"+color+";font-size:12px'>"+(up?"+":"")+q.change_pct.toFixed(2)+"%</span>";
+    const set = (cls, txt) => { const el = row.querySelector("."+cls); if (el) el.textContent = txt; };
+    const pr = row.querySelector(".wl-price");
+    if (pr) { pr.textContent = q.price.toFixed(2); pr.style.color = color; }
+    const cg = row.querySelector(".wl-chg");
+    if (cg) { cg.textContent = (up?"+":"")+q.change_pct.toFixed(2)+"%"; cg.style.color = color; }
+    set("wl-prev", q.prev_close!=null ? q.prev_close.toFixed(2) : "—");
+    set("wl-vol", fmtVol(q.volume));
+    set("wl-amt", fmtAmount(q.amount));
+    set("wl-pe", q.pe!=null ? q.pe.toFixed(2) : "—");
+    set("wl-pb", q.pb!=null ? q.pb.toFixed(2) : "—");
+    set("wl-cap", fmtAmount(q.mktcap));
   }
 }
 function addWatch(secid, name, code) {
@@ -1698,11 +1724,11 @@ document.getElementById("candidateBox").addEventListener("click", e => {
   if (b) doKline(Number(b.dataset.i));
 });
 document.getElementById("watchlist").addEventListener("click", e => {
-  const rm = e.target.closest(".x");
+  const rm = e.target.closest(".wl-x");
   if (rm) { removeWatch(rm.dataset.rm); return; }
-  const chip = e.target.closest(".wl-chip");
-  if (chip) {
-    const w = _watch.find(x => x.secid === chip.dataset.secid);
+  const row = e.target.closest(".wl-row");
+  if (row) {
+    const w = _watch.find(x => x.secid === row.dataset.secid);
     if (w) doKlineSecid(w.secid, w.name);
   }
 });
