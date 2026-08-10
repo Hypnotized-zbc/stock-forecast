@@ -641,12 +641,6 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
           display: flex; gap: 14px; align-items: flex-start; }
   .chart-col { flex: 1; min-width: 0; }
   canvas { display: block; cursor: crosshair; max-width: 100%; height: auto; }
-  #tip { width: 260px; flex: 0 0 260px; font-size: 14px; line-height: 2.0; color: #333;
-          background: #fafbfc; border-left: 3px solid #e5e7eb; padding: 12px 14px;
-          min-height: 260px; }
-  #tip .r { display: flex; justify-content: space-between; }
-  #tip .lbl { color: #888; }
-  #tip .val { font-weight: 600; }
   .legend { font-size: 12px; color: #666; margin-top: 6px; }
   .legend span { margin-right: 14px; }
   .up { color: #e03434; } .down { color: #089981; }
@@ -688,7 +682,6 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     <canvas id="futureChart" style="display:none"></canvas>
     <div class="legend" id="legend"></div>
   </div>
-  <div id="tip">查询后鼠标移到图上查看每日数据</div>
   <div id="fitPanel" style="display:none">
     <div class="f-title">模型拟合结果</div>
     <div id="fitBody"></div>
@@ -698,13 +691,14 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     <div id="futureBody"></div>
   </div>
 </div>
+<div id="chartTip" class="tip-box"></div>
 <div id="fitTip" class="tip-box"></div>
 <div id="futureTip" class="tip-box"></div>
 <div id="pinTip" class="tip-box"></div>
 <script>
 "use strict";
 const UP = "#e03434", DOWN = "#089981";
-const W = 900, H = 620, PAD = {L:64, R:20, T:24, B:42};
+const W = 1140, H = 620, PAD = {L:64, R:20, T:24, B:42};
 
 const cv = document.getElementById("chart");
 const ctx = cv.getContext("2d");
@@ -1163,7 +1157,7 @@ function switchView(v) {
   document.getElementById("tabFuture").className = v==="future" ? "tab active" : "tab";
   document.getElementById("chartControls").style.display = v==="chart" ? "" : "none";
   document.getElementById("legend").style.display = v==="chart" || v==="fit" ? "" : "none";
-  document.getElementById("tip").style.display = v==="chart" ? "" : "none";
+  if (v !== "chart") document.getElementById("chartTip").style.display = "none";
   document.getElementById("chart").style.display = (v==="chart" || v==="fit") ? "" : "none";
   document.getElementById("futureChart").style.display = v==="future" ? "" : "none";
   document.getElementById("fitPanel").style.display = v==="fit" ? "" : "none";
@@ -1298,9 +1292,19 @@ function drawTooltip() {
       tip.style.left = tx + "px"; tip.style.top = ty + "px";
       return;
     }
-    document.getElementById("tip").innerHTML = tipContentFor("chart", i);
+    // 行情视图：浮动窗口跟随鼠标显示每日数据（右侧固定面板已移除）
+    const tip = document.getElementById("chartTip");
+    tip.innerHTML = tipContentFor("chart", i);
+    tip.style.display = "block";
+    let tx = e.clientX + 14, ty = e.clientY - 10;
+    if (tx + 260 > window.innerWidth) tx = e.clientX - 270;
+    if (ty + 300 > window.innerHeight) ty = window.innerHeight - 310;
+    tip.style.left = tx + "px"; tip.style.top = ty + "px";
   };
-  cv.onmouseleave = () => { document.getElementById("fitTip").style.display = "none"; };
+  cv.onmouseleave = () => {
+    document.getElementById("fitTip").style.display = "none";
+    document.getElementById("chartTip").style.display = "none";
+  };
   // 单击固定一条参考线（最多一条，再点重选）
   cv.onclick = e => {
     if (!D || !n) return;
@@ -1358,7 +1362,6 @@ async function doKline(idx) {
     n = D.dates.length;
     document.getElementById("rangeInfo").textContent =
       (data.name || c["名称"]) + " | " + D.dates[0] + " ~ " + D.dates[n-1] + " | 共 " + n + " 个交易日";
-    document.getElementById("tip").innerHTML = "鼠标移到图上查看每日数据";
     document.getElementById("candidateBox").innerHTML = "";
     setStatus("完成");
     paint(currentType);
