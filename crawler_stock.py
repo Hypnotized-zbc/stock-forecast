@@ -951,7 +951,7 @@ function switchView(v) {
   document.getElementById("chartControls").style.display = v==="chart" ? "" : "none";
   document.getElementById("legend").style.display = v==="chart" || v==="fit" ? "" : "none";
   document.getElementById("tip").style.display = v==="chart" ? "" : "none";
-  document.getElementById("chart").style.display = v==="chart" ? "" : "none";
+  document.getElementById("chart").style.display = (v==="chart" || v==="fit") ? "" : "none";
   document.getElementById("futureChart").style.display = v==="future" ? "" : "none";
   document.getElementById("fitPanel").style.display = v==="fit" ? "" : "none";
   document.getElementById("futurePanel").style.display = v==="future" ? "" : "none";
