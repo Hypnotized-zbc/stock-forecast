@@ -207,11 +207,17 @@ CHART_TEMPLATE = """<!DOCTYPE html>
   h2 {{ margin: 0; font-size: 20px; color: #222; }}
   .sub {{ color: #888; font-size: 13px; }}
   select {{ padding: 7px 12px; font-size: 14px; border: 1px solid #ccc; border-radius: 6px; background: #fff; }}
-  .wrap {{ max-width: 1160px; margin: 0 auto; background: #fff; border-radius: 10px;
-          box-shadow: 0 2px 8px rgba(0,0,0,.06); padding: 12px; }}
-  canvas {{ display: block; width: 100%; height: auto; cursor: crosshair; }}
-  #tip {{ max-width: 1160px; margin: 10px auto 0; font-size: 13px; color: #333;
-          background: #fff; border-radius: 6px; padding: 8px 12px; box-shadow: 0 1px 4px rgba(0,0,0,.08); min-height: 18px; }}
+  .wrap {{ max-width: 1180px; margin: 0 auto; background: #fff; border-radius: 10px;
+          box-shadow: 0 2px 8px rgba(0,0,0,.06); padding: 12px;
+          display: flex; gap: 14px; align-items: flex-start; }}
+  .chart-col {{ flex: 1; min-width: 0; }}
+  canvas {{ display: block; cursor: crosshair; max-width: 100%; height: auto; }}
+  #tip {{ width: 260px; flex: 0 0 260px; font-size: 14px; line-height: 2.0; color: #333;
+          background: #fafbfc; border-left: 3px solid #e5e7eb; padding: 12px 14px;
+          min-height: 260px; }}
+  #tip .r {{ display: flex; justify-content: space-between; }}
+  #tip .lbl {{ color: #888; }}
+  #tip .val {{ font-weight: 600; }}
   .legend {{ font-size: 12px; color: #666; margin-top: 6px; }}
   .legend span {{ margin-right: 14px; }}
   .up {{ color: #e03434; }} .down {{ color: #089981; }}
@@ -229,16 +235,19 @@ CHART_TEMPLATE = """<!DOCTYPE html>
   </select>
   <span class="sub" id="rangeInfo"></span>
 </div>
-<div class="wrap"><canvas id="chart"></canvas>
-  <div class="legend" id="legend"></div>
+<div class="wrap">
+  <div class="chart-col">
+    <canvas id="chart"></canvas>
+    <div class="legend" id="legend"></div>
+  </div>
+  <div id="tip">鼠标移到图上查看每日数据</div>
 </div>
-<div id="tip">鼠标移到图上查看每日数据</div>
 <script>
 "use strict";
 const D = __DATA_JSON__;
 const n = D.dates.length;
 const UP = "#e03434", DOWN = "#089981";
-const W = 1140, H = 620, PAD = {L:64, R:20, T:24, B:42};
+const W = 900, H = 620, PAD = {L:64, R:20, T:24, B:42};
 
 const cv = document.getElementById("chart");
 const ctx = cv.getContext("2d");
@@ -306,11 +315,19 @@ function drawTooltip() {{
     drawCrosshair(i);
     const ch = D.changes[i];
     const cls = ch>=0 ? 'up' : 'down';
+    const row = (l, v) => "<div class='r'><span class='lbl'>"+l+"</span><span class='val'>"+v+"</span></div>";
     document.getElementById("tip").innerHTML =
-      "<b>"+D.dates[i]+"</b> &nbsp;开 "+fmt(D.opens[i])+" &nbsp;收 "+fmt(D.closes[i])+
-      " &nbsp;高 "+fmt(D.highs[i])+" &nbsp;低 "+fmt(D.lows[i])+
-      " &nbsp;量 "+fmt(D.vols[i],0)+"手 &nbsp;涨跌 <span class='"+cls+"'>"+fmt(ch)+"%</span>"+
-      " &nbsp;MA5 "+fmt(D.ma5[i])+" &nbsp;BOLL上 "+fmt(D.boll_up[i])+" / 中 "+fmt(D.boll_mid[i])+" / 下 "+fmt(D.boll_low[i]);
+      row("日期", "<b>"+D.dates[i]+"</b>") +
+      row("开盘", fmt(D.opens[i])) +
+      row("收盘", fmt(D.closes[i])) +
+      row("最高", fmt(D.highs[i])) +
+      row("最低", fmt(D.lows[i])) +
+      row("成交量", fmt(D.vols[i],0)+" 手") +
+      row("涨跌幅", "<span class='"+cls+"'>"+fmt(ch)+"%</span>") +
+      row("MA5", fmt(D.ma5[i])) +
+      row("BOLL上", fmt(D.boll_up[i])) +
+      row("BOLL中", fmt(D.boll_mid[i])) +
+      row("BOLL下", fmt(D.boll_low[i]));
   }};
 }}
 
@@ -439,7 +456,10 @@ paint(currentType);
 def build_chart_html(stock_name, rows):
     """生成自包含 HTML 图表页内容。"""
     data = build_chart_data(rows)
+    # 模板里 {{ }} 是预留转义，输出时统一转回单花括号
     html = (CHART_TEMPLATE
+            .replace("{{", "{")
+            .replace("}}", "}")
             .replace("__NAME__", stock_name)
             .replace("__DATA_JSON__", json.dumps(data, ensure_ascii=False)))
     return html
