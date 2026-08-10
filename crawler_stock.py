@@ -455,6 +455,14 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   #fitPanel .f-pred-title { font-size: 12px; color: #888; margin: 6px 0 2px; }
   #fitPanel .f-pred { display: flex; justify-content: space-between; font-size: 12px; color: #555; padding: 1px 0; }
   #fitPanel .f-dir { font-size: 13px; font-weight: 600; padding: 3px 0; }
+  #fitTip { position: fixed; z-index: 99; background: #fff; border: 1px solid #ddd;
+            border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,.15);
+            padding: 10px 12px; font-size: 13px; min-width: 210px; display: none;
+            font-family: "Microsoft YaHei", sans-serif; }
+  #fitTip .ft-date { font-size: 14px; font-weight: 600; margin-bottom: 6px; color: #222; }
+  #fitTip .ft-row { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; }
+  #fitTip .lbl { color: #888; }
+  #fitTip .val { font-weight: 600; }
   #candidateBox { margin-top: 8px; }
   .cand { display: inline-block; margin: 4px 6px 0 0; padding: 6px 12px; font-size: 13px;
           border: 1px solid #d1d5db; border-radius: 6px; background: #fff; cursor: pointer; }
@@ -526,6 +534,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     <div id="futureBody"></div>
   </div>
 </div>
+<div id="fitTip"></div>
 <script>
 "use strict";
 const UP = "#e03434", DOWN = "#089981";
@@ -1014,20 +1023,39 @@ function drawTooltip() {
     drawCrosshair(i);
     const ch = D.changes[i];
     const cls = ch>=0 ? 'up' : 'down';
-    const row = (l, v) => "<div class='r'><span class='lbl'>"+l+"</span><span class='val'>"+v+"</span></div>";
+    if (view === "fit") {
+      // 拟合视图：浮动窗口显示 当日真实收盘 + ARIMA/ETS 拟合值
+      const tip = document.getElementById("fitTip");
+      const aV = D.fit && D.fit.arima ? D.fit.arima.values[i] : null;
+      const eV = D.fit && D.fit.ets ? D.fit.ets.values[i] : null;
+      const row = (l, v, col) => "<div class='ft-row'><span class='lbl'>"+(col?'<i style="color:'+col+'">■</i> ':'')+l+"</span><span class='val'>"+v+"</span></div>";
+      tip.innerHTML =
+        "<div class='ft-date'>"+D.dates[i]+"</div>" +
+        row("真实收盘", fmt(D.closes[i])) +
+        row("ARIMA 拟合", aV!=null?fmt(aV):"—", "#dc2626") +
+        row("ETS 拟合", eV!=null?fmt(eV):"—", "#16a34a");
+      tip.style.display = "block";
+      let tx = e.clientX + 14, ty = e.clientY - 10;
+      if (tx + 230 > window.innerWidth) tx = e.clientX - 240;
+      if (ty + 130 > window.innerHeight) ty = window.innerHeight - 140;
+      tip.style.left = tx + "px"; tip.style.top = ty + "px";
+      return;
+    }
+    const row2 = (l, v) => "<div class='r'><span class='lbl'>"+l+"</span><span class='val'>"+v+"</span></div>";
     document.getElementById("tip").innerHTML =
-      row("日期", "<b>"+D.dates[i]+"</b>") +
-      row("开盘", fmt(D.opens[i])) +
-      row("收盘", fmt(D.closes[i])) +
-      row("最高", fmt(D.highs[i])) +
-      row("最低", fmt(D.lows[i])) +
-      row("成交量", fmt(D.vols[i],0)+" 手") +
-      row("涨跌幅", "<span class='"+cls+"'>"+fmt(ch)+"%</span>") +
-      row("MA5", fmt(D.ma5[i])) +
-      row("BOLL上", fmt(D.boll_up[i])) +
-      row("BOLL中", fmt(D.boll_mid[i])) +
-      row("BOLL下", fmt(D.boll_low[i]));
+      row2("日期", "<b>"+D.dates[i]+"</b>") +
+      row2("开盘", fmt(D.opens[i])) +
+      row2("收盘", fmt(D.closes[i])) +
+      row2("最高", fmt(D.highs[i])) +
+      row2("最低", fmt(D.lows[i])) +
+      row2("成交量", fmt(D.vols[i],0)+" 手") +
+      row2("涨跌幅", "<span class='"+cls+"'>"+fmt(ch)+"%</span>") +
+      row2("MA5", fmt(D.ma5[i])) +
+      row2("BOLL上", fmt(D.boll_up[i])) +
+      row2("BOLL中", fmt(D.boll_mid[i])) +
+      row2("BOLL下", fmt(D.boll_low[i]));
   };
+  cv.onmouseleave = () => { document.getElementById("fitTip").style.display = "none"; };
 }
 
 // ---- 查询流程 ----
