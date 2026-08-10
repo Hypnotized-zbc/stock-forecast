@@ -116,6 +116,38 @@ def ask_stock_name():
     return name
 
 
+def ask_date_range():
+    """询问读取时间范围；直接回车使用默认（近一年）。返回 (start, end)。
+
+    输入格式 YYYY-MM-DD，带格式与顺序校验，出错会重问。
+    """
+    today = datetime.now()
+    default_start = today - timedelta(days=365)
+    while True:
+        s = input(f"起始日期（YYYY-MM-DD，回车默认 {default_start:%Y-%m-%d}）：").strip()
+        e = input(f"结束日期（YYYY-MM-DD，回车默认 {today:%Y-%m-%d}）：").strip()
+        if s:
+            try:
+                start = datetime.strptime(s, "%Y-%m-%d")
+            except ValueError:
+                print("[!] 起始日期格式错误，请用 YYYY-MM-DD（如 2025-08-10）。")
+                continue
+        else:
+            start = default_start
+        if e:
+            try:
+                end = datetime.strptime(e, "%Y-%m-%d")
+            except ValueError:
+                print("[!] 结束日期格式错误，请用 YYYY-MM-DD（如 2026-08-10）。")
+                continue
+        else:
+            end = today
+        if start > end:
+            print("[!] 起始日期不能晚于结束日期。")
+            continue
+        return start, end
+
+
 def choose_candidate(candidates):
     """多候选时让用户选择，返回候选 dict。"""
     if not candidates:
@@ -184,10 +216,12 @@ def _fetch_kline_sina(secid, start, end):
     market = "sh" if secid.startswith("1.") else "sz"
     code = secid.split(".")[1]
     symbol = f"{market}{code}"
-    # datalen=300：近一年约 242 个交易日，留足余量
+    # 数据量随区间动态调整（接口上限约 1023 条），不足 300 条时取 300
+    days = (end - start).days
+    datalen = min(1023, max(300, days + 120))
     url = ("https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
            "CN_MarketData.getKLineData")
-    params = {"symbol": symbol, "scale": "240", "ma": "no", "datalen": "300"}
+    params = {"symbol": symbol, "scale": "240", "ma": "no", "datalen": str(datalen)}
     data = get_json(url, params)
     if not data:
         return None, []
@@ -596,9 +630,9 @@ def main():
         sys.exit(1)
     print(f"[i] 已选择：{chosen['名称']}（{chosen['代码']}）")
 
-    # 3. 下载近一年日K
-    end = datetime.now()
-    start = end - timedelta(days=365)
+    # 3. 下载日K（时间范围可自定义，默认近一年）
+    print("[i] 请设置数据时间范围（直接回车用默认）：")
+    start, end = ask_date_range()
     print(f"[i] 下载区间: {start:%Y-%m-%d} ~ {end:%Y-%m-%d} ...")
     stock_name, rows = fetch_kline(chosen["secid"], start, end)
     if not rows:
