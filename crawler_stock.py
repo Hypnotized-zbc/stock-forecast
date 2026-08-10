@@ -442,6 +442,45 @@ def _quote_sina(secid):
     }
 
 
+def fetch_quotes(secids):
+    """东财 ulist 批量实时行情（含 PE/PB/市值等基本面）；失败回退逐只新浪。"""
+    secids = [s.strip() for s in secids if s and s.strip()]
+    if not secids:
+        return []
+    try:
+        url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
+        params = {
+            "secids": ",".join(secids), "fltt": "2", "invt": "2",
+            "fields": "f2,f3,f5,f6,f9,f12,f13,f14,f18,f20,f21,f23",
+        }
+        data = get_json(url, params)
+        diff = (data.get("data") or {}).get("diff") or []
+        out = []
+        for it in diff:
+            if it.get("f2") is None:
+                continue
+            out.append({
+                "secid": ("1." if it.get("f13") == 1 else "0.") + str(it.get("f12")),
+                "name": it.get("f14"),
+                "code": str(it.get("f12")),
+                "price": it.get("f2"),
+                "prev_close": it.get("f18"),
+                "change_pct": it.get("f3"),
+                "volume": it.get("f5"),
+                "amount": it.get("f6"),
+                "pe": it.get("f9"),          # PE(动)
+                "pb": it.get("f23"),         # PB
+                "mktcap": it.get("f20"),     # 总市值(元)
+                "float_mktcap": it.get("f21"),  # 流通市值(元)
+            })
+        if out:
+            return out
+    except Exception as exc:
+        print(f"[quotes] 东财批量失败: {exc}")
+    # 回退：逐只新浪（无基本面字段）
+    return [q for q in (fetch_quote(s) for s in secids) if q]
+
+
 def fetch_quote(secid):
     """东财实时行情（主）→ 新浪（备）；双源都失败返回 None。"""
     try:
@@ -726,9 +765,6 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   .qb-item .k { color: #999; font-size: 12px; }
   .qb-item .v { font-weight: 600; }
   .qb-time { color: #bbb; font-size: 12px; margin-left: auto; }
-  .fund-item { display: flex; flex-direction: column; gap: 2px; min-width: 90px; }
-  .fund-item .k { color: #999; font-size: 12px; }
-  .fund-item .v { font-weight: 600; font-size: 14px; }
   .wl-bar { flex: 1; display: flex; flex-wrap: wrap; gap: 8px; min-width: 200px; }
   .wl-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px;
              background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 16px;
@@ -798,7 +834,6 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     <div id="futureBody"></div>
   </div>
 </div>
-<div id="fundBar" class="card-bar" style="display:none"></div>
 <div id="chartTip" class="tip-box"></div>
 <div id="fitTip" class="tip-box"></div>
 <div id="futureTip" class="tip-box"></div>
@@ -1458,6 +1493,7 @@ async function doSearch() {
 // ---- 实时行情 / 基本面 / 自选股 ----
 let _curSecid = null;
 let _quoteTimer = null;
+let _watchQuotes = {};
 let _watch = [];
 try { _watch = JSON.parse(localStorage.getItem("wl") || "[]"); } catch (e) { _watch = []; }
 
@@ -1465,41 +1501,48 @@ function fmtVol(v) { if (v==null) return "—"; if (v>=1e8) return (v/1e8).toFix
 function fmtAmount(v) { if (v==null) return "—"; if (v>=1e8) return (v/1e8).toFixed(2)+"亿"; if (v>=1e4) return (v/1e4).toFixed(2)+"万"; return v; }
 function fmtShares(v) { if (v==null) return "—"; if (v>=1e8) return (v/1e8).toFixed(2)+"亿股"; return v; }
 
-async function refreshQuote() {
-  if (!_curSecid) return;
+async function refreshAllQuotes() {
+  // 统一刷新：当前股 + 全部自选股（一次批量请求，同一时刻）
+  const secids = [];
+  if (_curSecid) secids.push(_curSecid);
+  for (const w of _watch) if (!secids.includes(w.secid)) secids.push(w.secid);
+  if (!secids.length) return;
   try {
-    const resp = await fetch("/api/quote?secid=" + encodeURIComponent(_curSecid));
-    const q = await resp.json();
-    if (q.error || q.price == null) return;
-    const up = q.change_pct >= 0;
-    const color = up ? UP : DOWN;
-    const t = new Date();
-    const ts = [t.getHours(), t.getMinutes(), t.getSeconds()].map(x => String(x).padStart(2,"0")).join(":");
-    const qb = document.getElementById("quoteBar");
-    qb.innerHTML =
-      "<span class='qb-name'>"+(q.name||"—")+" <span class='qb-code'>"+(q.code||"")+"</span></span>" +
-      "<span class='qb-price' style='color:"+color+"'>"+q.price.toFixed(2)+"</span>" +
-      "<span class='qb-item'><span class='k'>涨跌幅</span><span class='v' style='color:"+color+"'>"+(up?"+":"")+q.change_pct.toFixed(2)+"%</span></span>" +
-      "<span class='qb-item'><span class='k'>昨收</span><span class='v'>"+(q.prev_close!=null?q.prev_close.toFixed(2):"—")+"</span></span>" +
-      "<span class='qb-item'><span class='k'>成交量</span><span class='v'>"+fmtVol(q.volume)+"</span></span>" +
-      "<span class='qb-item'><span class='k'>成交额</span><span class='v'>"+fmtAmount(q.amount)+"</span></span>" +
-      "<span class='qb-time'>更新于 "+ts+"（每30秒自动刷新）</span>";
-    qb.style.display = "";
-    const fb = document.getElementById("fundBar");
-    fb.innerHTML =
-      "<span class='fund-item'><span class='k'>PE(动)</span><span class='v'>"+(q.pe!=null?q.pe.toFixed(2):"—")+"</span></span>" +
-      "<span class='fund-item'><span class='k'>PB</span><span class='v'>"+(q.pb!=null?q.pb.toFixed(2):"—")+"</span></span>" +
-      "<span class='fund-item'><span class='k'>总市值</span><span class='v'>"+fmtAmount(q.mktcap)+"</span></span>" +
-      "<span class='fund-item'><span class='k'>总股本</span><span class='v'>"+fmtShares(q.total_shares)+"</span></span>" +
-      "<span class='fund-item'><span class='k'>流通股本</span><span class='v'>"+fmtShares(q.float_shares)+"</span></span>" +
-      "<span class='fund-item'><span class='k'>每股净资产</span><span class='v'>"+(q.bps!=null?q.bps.toFixed(2):"—")+"</span></span>";
-    fb.style.display = "";
+    const resp = await fetch("/api/quotes?secids=" + encodeURIComponent(secids.join(",")));
+    const list = await resp.json();
+    if (!Array.isArray(list)) return;
+    const map = {};
+    for (const q of list) if (q && q.price != null) map[q.secid] = q;
+    _watchQuotes = map;
+    if (_curSecid && map[_curSecid]) renderQuoteBar(map[_curSecid]);
+    renderWatchQuotes(map);
   } catch (e) {}
+}
+
+function renderQuoteBar(q) {
+  const up = q.change_pct >= 0;
+  const color = up ? UP : DOWN;
+  const t = new Date();
+  const ts = [t.getHours(), t.getMinutes(), t.getSeconds()].map(x => String(x).padStart(2,"0")).join(":");
+  const qb = document.getElementById("quoteBar");
+  qb.innerHTML =
+    "<span class='qb-name'>"+(q.name||"—")+" <span class='qb-code'>"+(q.code||"")+"</span></span>" +
+    "<span class='qb-price' style='color:"+color+"'>"+q.price.toFixed(2)+"</span>" +
+    "<span class='qb-item'><span class='k'>涨跌幅</span><span class='v' style='color:"+color+"'>"+(up?"+":"")+q.change_pct.toFixed(2)+"%</span></span>" +
+    "<span class='qb-item'><span class='k'>昨收</span><span class='v'>"+(q.prev_close!=null?q.prev_close.toFixed(2):"—")+"</span></span>" +
+    "<span class='qb-item'><span class='k'>成交量</span><span class='v'>"+fmtVol(q.volume)+"</span></span>" +
+    "<span class='qb-item'><span class='k'>成交额</span><span class='v'>"+fmtAmount(q.amount)+"</span></span>" +
+    "<span class='qb-item'><span class='k'>PE(动)</span><span class='v'>"+(q.pe!=null?q.pe.toFixed(2):"—")+"</span></span>" +
+    "<span class='qb-item'><span class='k'>PB</span><span class='v'>"+(q.pb!=null?q.pb.toFixed(2):"—")+"</span></span>" +
+    "<span class='qb-item'><span class='k'>总市值</span><span class='v'>"+fmtAmount(q.mktcap)+"</span></span>" +
+    "<span class='qb-item'><span class='k'>流通市值</span><span class='v'>"+fmtAmount(q.float_mktcap)+"</span></span>" +
+    "<span class='qb-time'>更新于 "+ts+"（每30秒自动刷新）</span>";
+  qb.style.display = "";
 }
 
 function startQuoteTimer() {
   if (_quoteTimer) clearInterval(_quoteTimer);
-  _quoteTimer = setInterval(refreshQuote, 30000);
+  _quoteTimer = setInterval(refreshAllQuotes, 30000);
 }
 
 function setChartData(data, name, secid) {
@@ -1511,7 +1554,7 @@ function setChartData(data, name, secid) {
   document.getElementById("candidateBox").innerHTML = "";
   setStatus("完成");
   paint(currentType);
-  refreshQuote();
+  refreshAllQuotes();
   startQuoteTimer();
 }
 
@@ -1520,13 +1563,27 @@ function renderWatchlist() {
   const bar = document.getElementById("watchlist");
   if (!_watch.length) { bar.innerHTML = "<span class='wl-empty'>自选股（查询候选旁点 ＋ 添加）</span>"; return; }
   bar.innerHTML = _watch.map(w =>
-    "<span class='wl-chip' data-secid='"+w.secid+"'><span>"+w.name+" "+w.code+"</span><span class='x' data-rm='"+w.secid+"'>×</span></span>"
+    "<span class='wl-chip' data-secid='"+w.secid+"'><span>"+w.name+" "+w.code+"</span><span class='pr'></span><span class='x' data-rm='"+w.secid+"'>×</span></span>"
   ).join("");
+  renderWatchQuotes(_watchQuotes);
+}
+function renderWatchQuotes(map) {
+  for (const chip of document.querySelectorAll(".wl-chip")) {
+    const q = map[chip.dataset.secid];
+    const el = chip.querySelector(".pr");
+    if (!el) continue;
+    if (!q || q.price == null) { el.textContent = ""; continue; }
+    const up = q.change_pct >= 0;
+    const color = up ? UP : DOWN;
+    el.innerHTML = "<b style='color:"+color+";font-weight:700'>"+q.price.toFixed(2)+"</b>" +
+                   " <span style='color:"+color+";font-size:12px'>"+(up?"+":"")+q.change_pct.toFixed(2)+"%</span>";
+  }
 }
 function addWatch(secid, name, code) {
   if (_watch.some(w => w.secid === secid)) { setStatus("已在自选中"); return; }
   _watch.push({secid: secid, name: name, code: code});
   saveWatch(); renderWatchlist();
+  refreshAllQuotes();
   setStatus("已加入自选: " + name);
 }
 function removeWatch(secid) {
@@ -1661,6 +1718,7 @@ window.addEventListener("pagehide", () => {
   drawTooltip();
   paint(currentType);
   renderWatchlist();
+  refreshAllQuotes();
 })();
 </script>
 </body>
@@ -1736,6 +1794,12 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
                 self._send_json(data)
+            elif path == "/api/quotes":
+                secids = (params.get("secids") or [""])[0].split(",")
+                if not secids or not secids[0]:
+                    self._send_json({"error": "缺少 secids 参数"}, 400)
+                    return
+                self._send_json(fetch_quotes(secids))
             elif path == "/api/quote":
                 secid = (params.get("secid") or [""])[0].strip()
                 if not secid:
