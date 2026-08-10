@@ -562,7 +562,7 @@ def compute_fits(closes, dates=None, horizon=10):
         ss_tot = sum((y[i] - y_mean) ** 2 for i in idx)
         r2 = 1 - ss_res / ss_tot if ss_tot > 1e-12 else 0.0
         r["mae"] = round(mae, 4)
-        r["rmse"] = round(rmse, 4)
+        r["rmse"] = max(round(rmse, 4), 1e-9)  # 保底，避免 0 导致前端逆加权除零
         r["r2"] = round(r2, 4)
 
     return results
@@ -1042,7 +1042,7 @@ function weightedPredict() {
   const ws = {};
   let wsum = 0;
   for (const k of FIT_ORDER) {
-    if (D.fit[k] && D.fit[k].predict && D.fit[k].rmse) {
+    if (D.fit[k] && D.fit[k].predict && D.fit[k].rmse && D.fit[k].rmse > 0) {
       ws[k] = 1 / D.fit[k].rmse;
       wsum += ws[k];
     }
