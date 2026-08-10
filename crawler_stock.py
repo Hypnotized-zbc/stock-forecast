@@ -610,8 +610,8 @@ function drawChange() {
   legend("<span><i style='color:"+UP+"'>■</i> 上涨</span><span><i style='color:"+DOWN+"'>■</i> 下跌</span><span>单位：%</span>");
 }
 
-// ---- 模型拟合图（真实收盘 + ARIMA + 线性回归 + ETS）----
-const FIT_COLORS = {arima: "#dc2626", linear: "#2563eb", ets: "#16a34a"};
+// ---- 模型拟合图（真实收盘 + ARIMA + ETS）----
+const FIT_COLORS = {arima: "#dc2626", ets: "#16a34a"};
 
 function drawFit() {
   ctx.clearRect(0, 0, W, H);  // 先清空画布，避免残留上一张图（如 K 线）
@@ -619,7 +619,7 @@ function drawFit() {
   const series = [["真实收盘", D.closes, "#111827", 2.0]];
   let all = [...D.closes];
   if (D.fit) {
-    for (const k of ["arima", "linear", "ets"]) {
+    for (const k of ["arima", "ets"]) {
       if (D.fit[k]) {
         series.push([D.fit[k].name, D.fit[k].values, FIT_COLORS[k], 1.6]);
         all = all.concat(D.fit[k].values.filter(v=>v!=null));
@@ -641,7 +641,7 @@ function drawFit() {
   }
   let lg = "<span><i style='color:#111827'>—</i> 真实收盘</span>";
   if (D.fit) {
-    for (const k of ["arima", "linear", "ets"]) {
+    for (const k of ["arima", "ets"]) {
       if (D.fit[k]) lg += "<span><i style='color:"+FIT_COLORS[k]+"'>—</i> "+D.fit[k].name+"</span>";
     }
   }
@@ -655,7 +655,7 @@ function renderFitPanel() {
     body.innerHTML = "<div style='color:#999'>模型拟合不可用（数据不足或拟合失败）</div>";
     return;
   }
-  const order = [["arima", "ARIMA 拟合"], ["linear", "线性回归"], ["ets", "ETS 指数平滑"]];
+  const order = [["arima", "ARIMA 拟合"], ["ets", "ETS 指数平滑"]];
   let html = "";
   for (const [k, title] of order) {
     const m = D.fit[k];
@@ -717,7 +717,9 @@ function drawTooltip() {
     const px = (e.clientX-rect.left) * W / rect.width;
     const i = Math.round((px-PAD.L) * Math.max(1,n-1) / (W-PAD.L-PAD.R));
     if (i<0 || i>=n) return;
-    paint(currentType);
+    // 按当前视图重绘：行情视图画当前图类型，拟合视图重画拟合图（不变成K线）
+    if (view === "fit") { drawFit(); }
+    else { paint(currentType); }
     drawCrosshair(i);
     const ch = D.changes[i];
     const cls = ch>=0 ? 'up' : 'down';
