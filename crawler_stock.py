@@ -608,16 +608,16 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   .tab { padding: 7px 18px; font-size: 14px; border: 1px solid #d1d5db; background: #fff;
          border-radius: 6px 6px 0 0; cursor: pointer; margin-right: 4px; }
   .tab.active { background: #2563eb; color: #fff; border-color: #2563eb; }
-  #fitPanel .f-title { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
-  #fitPanel .f-row { display: flex; justify-content: space-between; padding: 5px 0;
-         border-bottom: 1px dashed #e5e7eb; font-size: 13px; }
-  #fitPanel .f-row .f-name { display: flex; align-items: center; gap: 6px; }
-  #fitPanel .swatch { display: inline-block; width: 18px; height: 4px; border-radius: 2px; }
-  #fitPanel .f-metrics { font-size: 13px; color: #666; margin-top: 6px; }
-  #fitPanel .f-metrics div { padding: 2px 0; }
-  #fitPanel .f-metrics b { font-weight: 600; }
-  #fitPanel .f-pred { display: flex; justify-content: space-between; font-size: 12px; color: #555; padding: 1px 0; }
-  #fitPanel .f-dir { font-size: 13px; font-weight: 600; padding: 3px 0; }
+  .f-title { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+  .f-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; }
+  .f-row .f-name { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .swatch { display: inline-block; width: 20px; height: 10px; border-radius: 3px; flex: none; }
+  .f-metrics { font-size: 13px; color: #666; margin-top: 6px; }
+  .f-metrics div { padding: 2px 0; }
+  .f-metrics b { font-weight: 600; }
+  .f-pred { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #555; padding: 2px 0; }
+  .f-pred .val { font-weight: 700; }
+  .f-dir { font-size: 13px; font-weight: 600; padding: 3px 0; }
   .f-pred-title { font-size: 12px; color: #888; margin: 8px 0 2px; }
   .f-final { font-size: 14px; font-weight: 700; padding: 4px 0; }
   #fitTip { position: fixed; z-index: 99; background: #fff; border: 1px solid #ddd;
@@ -1091,7 +1091,7 @@ function renderFuturePanel() {
     const dt = D.fit.arima.predict_dates[i] ? D.fit.arima.predict_dates[i].slice(5) : ("D+"+(i+1));
     const dv = ((wp[i] - lastClose) / lastClose * 100);
     const cls = dv >= 0 ? "up" : "down";
-    html += "<div class='f-pred'><span>"+dt+"</span><span>"+fmt(wp[i])+
+    html += "<div class='f-pred'><span>"+dt+"</span><span class='val'>"+fmt(wp[i])+
             " <span class='"+cls+"'>("+dv.toFixed(2)+"%)</span></span></div>";
   }
   body.innerHTML = html;
