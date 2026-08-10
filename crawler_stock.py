@@ -250,20 +250,14 @@ def compute_fits(closes, dates=None):
     返回结构：
         {"linear": {"name", "values": [...], "mae", "rmse", "r2"}, ...}
         每个模型含 "predict": [5个预测值], "predict_dates": [5个日期]
-    纯 numpy 实现，不依赖 statsmodels（该库体积大且环境易缺失）：
-    - 线性回归：最小二乘直线
+    纯 Python 实现，零第三方依赖（只需 requests），任何环境可跑：
+    - 线性回归：最小二乘直线（手写公式）
     - ARIMA(1,1,0)：一阶差分 + AR(1) 系数最小二乘估计（数学上等价）
     - ETS：Holt 线性趋势指数平滑（α/β 网格搜索最小化 SSE）
     数据不足或异常时返回 None（前端提示不可用，不影响行情功能）。
     """
-    try:
-        import numpy as np
-    except ImportError:
-        return None
-
-    y = np.asarray(closes, dtype=float)
+    y = [float(v) for v in closes]
     n = len(y)
-    t = np.arange(n)
     if n < 10:
         return None
 
@@ -278,29 +272,45 @@ def compute_fits(closes, dates=None):
     except Exception:
         pred_dates = [f"D+{i + 1}" for i in range(5)]
 
+    def _clean(vals):
+        """None/非数值 → None，其余保留 4 位小数（json.dumps 输出 NaN 非法 JSON）。"""
+        out = []
+        for v in vals:
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                out.append(None)
+                continue
+            if math.isnan(f) or math.isinf(f):
+                out.append(None)
+            else:
+                out.append(round(f, 4))
+        return out
+
     results = {}
 
-    def _clean(vals):
-        """NaN/None → None，其余保留 4 位小数（json.dumps 默认输出 NaN 非法 JSON）。"""
-        return [None if (v is None or (isinstance(v, float) and math.isnan(v)))
-                else round(float(v), 4) for v in vals]
-
-    # ---- 线性回归：y = a*t + b（polyfit 返回 [斜率, 截距]）----
+    # ---- 线性回归：y = a*t + b（最小二乘手写公式）----
     try:
-        slope, intercept = np.polyfit(t, y, 1)
+        ts = list(range(n))
+        mt = sum(ts) / n
+        my = sum(y) / n
+        sxy = sum((t - mt) * (v - my) for t, v in zip(ts, y))
+        sxx = sum((t - mt) ** 2 for t in ts)
+        slope = sxy / sxx if sxx > 1e-12 else 0.0
+        intercept = my - slope * mt
         results["linear"] = {"name": "线性回归",
-                             "values": _clean(slope * t + intercept)}
+                             "values": _clean(slope * t + intercept for t in ts)}
     except Exception:
         pass
 
     # ---- ARIMA(1,1,0)：diff[t] = y[t]-y[t-1]，AR(1): diff[t]=φ·diff[t-1] ----
     try:
-        diff = np.diff(y)
-        num = float(np.sum(diff[1:] * diff[:-1]))
-        den = float(np.sum(diff[:-1] ** 2))
+        diff = [y[i] - y[i - 1] for i in range(1, n)]
+        num = sum(diff[i] * diff[i - 1] for i in range(1, len(diff)))
+        den = sum(d * d for d in diff[:-1])
         phi = num / den if den > 1e-12 else 0.0
-        phi = float(np.clip(phi, -0.99, 0.99))  # 保证平稳
-        fitted = np.full(n, np.nan)
+        phi = max(-0.99, min(0.99, phi))  # 保证平稳
+        fitted = [None] * n
         for i in range(2, n):
             fitted[i] = y[i - 1] + phi * (y[i - 1] - y[i - 2])
         # 未来 5 日预测：差分 AR(1) 递推外推
@@ -322,7 +332,7 @@ def compute_fits(closes, dates=None):
         def _holt(alpha, beta):
             level = y[0]
             trend = y[1] - y[0] if n > 1 else 0.0
-            out = np.full(n, np.nan)
+            out = [None] * n
             out[0] = y[0]
             for i in range(1, n):
                 out[i] = level + trend                     # 一步拟合
@@ -332,11 +342,12 @@ def compute_fits(closes, dates=None):
             return out
 
         best_a, best_b, best_sse, best_fit = 0.3, 0.1, float("inf"), None
-        for alpha in np.arange(0.05, 0.96, 0.1):
-            for beta in np.arange(0.01, 0.31, 0.05):
-                f = _holt(float(alpha), float(beta))
-                err = y[1:] - f[1:]
-                sse = float(np.sum(err ** 2))
+        alphas = [round(0.05 + 0.1 * i, 2) for i in range(10)]   # 0.05~0.95
+        betas = [round(0.01 + 0.05 * i, 2) for i in range(7)]    # 0.01~0.31
+        for alpha in alphas:
+            for beta in betas:
+                f = _holt(alpha, beta)
+                sse = sum((y[i] - f[i]) ** 2 for i in range(1, n))
                 if sse < best_sse:
                     best_a, best_b, best_sse, best_fit = alpha, beta, sse, f
         # 未来 5 日预测：用最优 α/β 递推至末尾状态，水平+趋势外推
@@ -356,18 +367,18 @@ def compute_fits(closes, dates=None):
     if not results:
         return None
 
-    # 误差指标：MAE / RMSE / R²（跳过 NaN 的前缀段）
-    y_mean = float(y.mean())
+    # 误差指标：MAE / RMSE / R²（跳过 None 的前缀段）
+    y_mean = sum(y) / n
     for key, r in results.items():
-        vals = np.array(r["values"], dtype=float)
-        mask = ~np.isnan(vals)
-        if mask.sum() < 5:
+        vals = r["values"]
+        idx = [i for i, v in enumerate(vals) if v is not None]
+        if len(idx) < 5:
             continue
-        err = y[mask] - vals[mask]
-        mae = float(np.mean(np.abs(err)))
-        rmse = float(np.sqrt(np.mean(err ** 2)))
-        ss_res = float(np.sum(err ** 2))
-        ss_tot = float(np.sum((y[mask] - y_mean) ** 2))
+        errs = [y[i] - vals[i] for i in idx]
+        mae = sum(abs(e) for e in errs) / len(errs)
+        rmse = (sum(e * e for e in errs) / len(errs)) ** 0.5
+        ss_res = sum(e * e for e in errs)
+        ss_tot = sum((y[i] - y_mean) ** 2 for i in idx)
         r2 = 1 - ss_res / ss_tot if ss_tot > 1e-12 else 0.0
         r["mae"] = round(mae, 4)
         r["rmse"] = round(rmse, 4)
