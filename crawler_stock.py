@@ -700,6 +700,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
 </div>
 <div id="fitTip" class="tip-box"></div>
 <div id="futureTip" class="tip-box"></div>
+<div id="pinTip" class="tip-box"></div>
 <script>
 "use strict";
 const UP = "#e03434", DOWN = "#089981";
@@ -887,6 +888,7 @@ function drawFit() {
     }
   }
   legend(lg);
+  drawPinLine("fit");
 }
 
 function renderFitPanel() {
@@ -1027,6 +1029,26 @@ function drawFuture() {
     fctx.fillStyle = "#111827"; fctx.textAlign = "center";
     fctx.fillText(wp[i].toFixed(2), x, y - 12);
   }
+  drawPinLine("future");
+}
+
+// 固定参考线（单击设置，最多一条；仅当前视图匹配时绘制）
+function drawPinLine(v) {
+  const pin = window._pin;
+  if (!pin || pin.view !== v || pin.i == null) return;
+  const i = pin.i;
+  if (v === "future") {
+    const padL = 70, padR = 24, padT = 60, padB = 46, plotW = W - padL - padR, m = 10;
+    const x = padL + i * plotW / Math.max(1, m - 1);
+    fctx.strokeStyle = "rgba(17,24,39,0.5)"; fctx.setLineDash([4,4]); fctx.lineWidth = 1.2;
+    fctx.beginPath(); fctx.moveTo(x, padT); fctx.lineTo(x, H - padB); fctx.stroke();
+    fctx.setLineDash([]);
+    return;
+  }
+  if (i < 0 || i >= n) return;
+  ctx.strokeStyle = "rgba(17,24,39,0.5)"; ctx.setLineDash([4,4]); ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.moveTo(xOf(i), PAD.T); ctx.lineTo(xOf(i), H-PAD.B); ctx.stroke();
+  ctx.setLineDash([]);
 }
 
 // 未来预测图悬停：十字线 + 浮窗显示各预测线当日值
@@ -1048,28 +1070,26 @@ function drawFutureTooltip() {
     fctx.beginPath(); fctx.moveTo(xF(i), padT); fctx.lineTo(xF(i), H - padB); fctx.stroke();
     fctx.setLineDash([]);
     // 浮窗：真实收盘 + 5 模型预测 + 最终加权
-    const lastClose = D.closes[D.closes.length-1];
-    const dt = D.fit.arima.predict_dates[i] || ("D+"+(i+1));
-    const wp = weightedPredict();
-    const models = [["ARIMA", D.fit.arima.predict[i], "#dc2626"],
-                    ["ETS", D.fit.ets ? D.fit.ets.predict[i] : null, "#16a34a"],
-                    ["Prophet", D.fit.prophet ? D.fit.prophet.predict[i] : null, "#f59e0b"],
-                    ["SVR", D.fit.svr ? D.fit.svr.predict[i] : null, "#8b5cf6"],
-                    ["随机森林", D.fit.rf ? D.fit.rf.predict[i] : null, "#06b6d4"]];
-    let html = "<div class='ft-date'>"+dt+"</div>";
-    html += "<div class='ft-row'><span class='lbl'>真实收盘(现价)</span><span class='val'>"+lastClose.toFixed(2)+"</span></div>";
-    for (const [nm, v, col] of models) {
-      html += "<div class='ft-row'><span class='lbl'><i style='color:"+col+";font-style:normal'>■</i> "+nm+"</span><span class='val'>"+(v!=null?v.toFixed(2):"—")+"</span></div>";
-    }
-    html += "<div class='ft-row'><span class='lbl'><i style='color:#111827;font-style:normal'>■</i> 最终(加权)</span><span class='val'>"+(wp[i]!=null?wp[i].toFixed(2):"—")+"</span></div>";
-    tip.innerHTML = html;
+    tip.innerHTML = tipContentFor("future", i);
     tip.style.display = "block";
     let tx = e.clientX + 14, ty = e.clientY - 10;
-    if (tx + 240 > window.innerWidth) tx = e.clientX - 250;
-    if (ty + 180 > window.innerHeight) ty = window.innerHeight - 190;
+    if (tx + 260 > window.innerWidth) tx = e.clientX - 270;
+    if (ty + 200 > window.innerHeight) ty = window.innerHeight - 210;
     tip.style.left = tx + "px"; tip.style.top = ty + "px";
   };
   fcv.onmouseleave = () => { document.getElementById("futureTip").style.display = "none"; };
+  // 单击固定一条参考线（最多一条，再点重选）
+  fcv.onclick = e => {
+    if (!D || !D.fit || !D.fit.arima || !D.fit.arima.predict) return;
+    const rect = fcv.getBoundingClientRect();
+    const px = (e.clientX - rect.left) * W / rect.width;
+    const padL = 70, padR = 24, plotW = W - padL - padR, m = 10;
+    const i = Math.round((px - padL) / (plotW / Math.max(1, m - 1)));
+    if (i < 0 || i >= m) return;
+    window._pin = {view: "future", i: i};
+    drawFuture();
+    showPinTip("future");
+  };
 }
 drawFutureTooltip();
 
@@ -1151,6 +1171,7 @@ function switchView(v) {
   if (v==="fit") { renderFitPanel(); drawFit(); }
   else if (v==="future") { renderFuturePanel(); drawFuture(); }
   else paint(currentType);
+  showPinTip(v);
 }
 document.getElementById("tabChart").addEventListener("click", () => switchView("chart"));
 document.getElementById("tabFit").addEventListener("click", () => switchView("fit"));
@@ -1170,6 +1191,7 @@ function paint(type) {
   else if (type=="boll") drawBOLL();
   else if (type=="vol") drawVol();
   else drawChange();
+  drawPinLine("chart");
 }
 function drawCrosshair(i) {
   const x = xOf(i);
@@ -1178,6 +1200,82 @@ function drawCrosshair(i) {
   ctx.beginPath(); ctx.moveTo(x, PAD.T); ctx.lineTo(x, H-PAD.B); ctx.stroke();
   ctx.setLineDash([]);
 }
+// 统一浮窗内容：view = chart / fit / future，i = 日期索引
+function tipContentFor(view, i) {
+  if (view === "fit") {
+    const aV = D.fit && D.fit.arima ? D.fit.arima.values[i] : null;
+    const eV = D.fit && D.fit.ets ? D.fit.ets.values[i] : null;
+    const pV = D.fit && D.fit.prophet ? D.fit.prophet.values[i] : null;
+    const sV = D.fit && D.fit.svr ? D.fit.svr.values[i] : null;
+    const rV = D.fit && D.fit.rf ? D.fit.rf.values[i] : null;
+    const row = (l, v, col) => "<div class='ft-row'><span class='lbl'>"+(col?'<i style="color:'+col+'">■</i> ':'')+l+"</span><span class='val'>"+v+"</span></div>";
+    let h = "<div class='ft-date'>"+D.dates[i]+"</div>";
+    h += row("真实收盘", fmt(D.closes[i]));
+    h += row("ARIMA 拟合", aV!=null?fmt(aV):"—", "#dc2626");
+    h += row("ETS 拟合", eV!=null?fmt(eV):"—", "#16a34a");
+    h += row("Prophet 拟合", pV!=null?fmt(pV):"—", "#f59e0b");
+    h += row("SVR 拟合", sV!=null?fmt(sV):"—", "#8b5cf6");
+    h += row("随机森林拟合", rV!=null?fmt(rV):"—", "#06b6d4");
+    return h;
+  }
+  if (view === "future") {
+    const lastClose = D.closes[D.closes.length-1];
+    const dt = D.fit.arima.predict_dates[i] || ("D+"+(i+1));
+    const wp = weightedPredict();
+    const models = [["ARIMA", D.fit.arima.predict[i], "#dc2626"],
+                    ["ETS", D.fit.ets ? D.fit.ets.predict[i] : null, "#16a34a"],
+                    ["Prophet", D.fit.prophet ? D.fit.prophet.predict[i] : null, "#f59e0b"],
+                    ["SVR", D.fit.svr ? D.fit.svr.predict[i] : null, "#8b5cf6"],
+                    ["随机森林", D.fit.rf ? D.fit.rf.predict[i] : null, "#06b6d4"]];
+    let h = "<div class='ft-date'>"+dt+"</div>";
+    h += "<div class='ft-row'><span class='lbl'>真实收盘(现价)</span><span class='val'>"+lastClose.toFixed(2)+"</span></div>";
+    for (const [nm, v, col] of models) {
+      h += "<div class='ft-row'><span class='lbl'><i style='color:"+col+";font-style:normal'>■</i> "+nm+"</span><span class='val'>"+(v!=null?v.toFixed(2):"—")+"</span></div>";
+    }
+    h += "<div class='ft-row'><span class='lbl'><i style='color:#111827;font-style:normal'>■</i> 最终(加权)</span><span class='val'>"+(wp[i]!=null?wp[i].toFixed(2):"—")+"</span></div>";
+    return h;
+  }
+  // chart
+  const ch = D.changes[i];
+  const cls = ch>=0 ? 'up' : 'down';
+  const row2 = (l, v) => "<div class='r'><span class='lbl'>"+l+"</span><span class='val'>"+v+"</span></div>";
+  return row2("日期", "<b>"+D.dates[i]+"</b>") +
+    row2("开盘", fmt(D.opens[i])) +
+    row2("收盘", fmt(D.closes[i])) +
+    row2("最高", fmt(D.highs[i])) +
+    row2("最低", fmt(D.lows[i])) +
+    row2("成交量", fmt(D.vols[i],0)+" 手") +
+    row2("涨跌幅", "<span class='"+cls+"'>"+fmt(ch)+"%</span>") +
+    row2("MA5", fmt(D.ma5[i])) +
+    row2("BOLL上", fmt(D.boll_up[i])) +
+    row2("BOLL中", fmt(D.boll_mid[i])) +
+    row2("BOLL下", fmt(D.boll_low[i]));
+}
+
+// 固定参考线（单击设置，最多一条；再点重选）。浮窗固定在参考线旁。
+function showPinTip(v) {
+  const tip = document.getElementById("pinTip");
+  const pin = window._pin;
+  if (!pin || pin.view !== v || !D || !n || pin.i == null) { tip.style.display = "none"; return; }
+  const i = pin.i;
+  tip.innerHTML = tipContentFor(v, i);
+  const cvs = v === "future" ? fcv : cv;
+  const rect = cvs.getBoundingClientRect();
+  let x;
+  if (v === "future") {
+    const padL = 70, padR = 24, plotW = W - padL - padR, m = 10;
+    x = padL + i * plotW / Math.max(1, m - 1);
+  } else {
+    x = xOf(i);
+  }
+  const sx = rect.left + x * rect.width / W;
+  let tx = sx + 14;
+  if (tx + 260 > window.innerWidth) tx = sx - 270;
+  tip.style.left = tx + "px";
+  tip.style.top = (rect.top + 30) + "px";
+  tip.style.display = "block";
+}
+
 function drawTooltip() {
   cv.onmousemove = e => {
     if (!D || !n) return;
@@ -1189,41 +1287,31 @@ function drawTooltip() {
     if (view === "fit") { drawFit(); }
     else { paint(currentType); }
     drawCrosshair(i);
-    const ch = D.changes[i];
-    const cls = ch>=0 ? 'up' : 'down';
     if (view === "fit") {
-      // 拟合视图：浮动窗口显示 当日真实收盘 + ARIMA/ETS 拟合值
+      // 拟合视图：浮动窗口显示 当日真实收盘 + 各模型拟合值
       const tip = document.getElementById("fitTip");
-      const aV = D.fit && D.fit.arima ? D.fit.arima.values[i] : null;
-      const eV = D.fit && D.fit.ets ? D.fit.ets.values[i] : null;
-      const row = (l, v, col) => "<div class='ft-row'><span class='lbl'>"+(col?'<i style="color:'+col+'">■</i> ':'')+l+"</span><span class='val'>"+v+"</span></div>";
-      tip.innerHTML =
-        "<div class='ft-date'>"+D.dates[i]+"</div>" +
-        row("真实收盘", fmt(D.closes[i])) +
-        row("ARIMA 拟合", aV!=null?fmt(aV):"—", "#dc2626") +
-        row("ETS 拟合", eV!=null?fmt(eV):"—", "#16a34a");
+      tip.innerHTML = tipContentFor("fit", i);
       tip.style.display = "block";
       let tx = e.clientX + 14, ty = e.clientY - 10;
-      if (tx + 230 > window.innerWidth) tx = e.clientX - 240;
-      if (ty + 130 > window.innerHeight) ty = window.innerHeight - 140;
+      if (tx + 260 > window.innerWidth) tx = e.clientX - 270;
+      if (ty + 200 > window.innerHeight) ty = window.innerHeight - 210;
       tip.style.left = tx + "px"; tip.style.top = ty + "px";
       return;
     }
-    const row2 = (l, v) => "<div class='r'><span class='lbl'>"+l+"</span><span class='val'>"+v+"</span></div>";
-    document.getElementById("tip").innerHTML =
-      row2("日期", "<b>"+D.dates[i]+"</b>") +
-      row2("开盘", fmt(D.opens[i])) +
-      row2("收盘", fmt(D.closes[i])) +
-      row2("最高", fmt(D.highs[i])) +
-      row2("最低", fmt(D.lows[i])) +
-      row2("成交量", fmt(D.vols[i],0)+" 手") +
-      row2("涨跌幅", "<span class='"+cls+"'>"+fmt(ch)+"%</span>") +
-      row2("MA5", fmt(D.ma5[i])) +
-      row2("BOLL上", fmt(D.boll_up[i])) +
-      row2("BOLL中", fmt(D.boll_mid[i])) +
-      row2("BOLL下", fmt(D.boll_low[i]));
+    document.getElementById("tip").innerHTML = tipContentFor("chart", i);
   };
   cv.onmouseleave = () => { document.getElementById("fitTip").style.display = "none"; };
+  // 单击固定一条参考线（最多一条，再点重选）
+  cv.onclick = e => {
+    if (!D || !n) return;
+    const rect = cv.getBoundingClientRect();
+    const px = (e.clientX-rect.left) * W / rect.width;
+    const i = Math.round((px-PAD.L) * Math.max(1,n-1) / (W-PAD.L-PAD.R));
+    if (i<0 || i>=n) return;
+    window._pin = {view: view, i: i};
+    if (view === "fit") { drawFit(); } else { paint(currentType); }
+    showPinTip(view);
+  };
 }
 
 // ---- 查询流程 ----
