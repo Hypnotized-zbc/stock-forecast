@@ -388,11 +388,12 @@ def _quote_eastmoney(secid):
         "secid": secid, "invt": "2", "fltt": "2",
         "fields": "f43,f47,f48,f57,f58,f60,f84,f85,f92,f162,f167,f170,f183",
     }
-    data = get_json(url, params)
+    data = get_json(url, params, retries=2)  # 行情类接口快速失败，尽早切换备用源
     d = data.get("data") or {}
     if not d or d.get("f43") is None:
         return None
     return {
+        "secid": secid,
         "name": d.get("f58"),
         "code": d.get("f57"),
         "price": d.get("f43"),
@@ -430,6 +431,7 @@ def _quote_sina(secid):
     except (ValueError, IndexError):
         return None
     return {
+        "secid": secid,
         "name": parts[0],
         "code": code,
         "price": price,
@@ -453,7 +455,7 @@ def fetch_quotes(secids):
             "secids": ",".join(secids), "fltt": "2", "invt": "2",
             "fields": "f2,f3,f5,f6,f9,f12,f13,f14,f18,f20,f21,f23",
         }
-        data = get_json(url, params)
+        data = get_json(url, params, retries=2)  # 行情类接口快速失败，尽早切换备用源
         diff = (data.get("data") or {}).get("diff") or []
         out = []
         for it in diff:
@@ -765,7 +767,10 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   .qb-item .k { color: #999; font-size: 12px; }
   .qb-item .v { font-weight: 600; }
   .qb-time { color: #bbb; font-size: 12px; margin-left: auto; }
-  .wl-bar { flex: 1; display: flex; flex-wrap: wrap; gap: 8px; min-width: 200px; }
+  .qb-refresh { border: 1px solid #d1d5db; background: #fff; border-radius: 6px;
+                padding: 3px 8px; font-size: 14px; cursor: pointer; color: #555; }
+  .qb-refresh:hover { border-color: #2563eb; color: #2563eb; }
+  .wl-bar { max-width: 1180px; margin: 8px auto 0; display: flex; flex-wrap: wrap; gap: 8px; }
   .wl-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px;
              background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 16px;
              font-size: 13px; color: #3730a3; cursor: pointer; }
@@ -799,9 +804,9 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     <input type="date" id="endDate">
     <button id="searchBtn">查询</button>
     <span id="status"></span>
-    <div id="watchlist" class="wl-bar"></div>
   </div>
   <div id="candidateBox"></div>
+  <div id="watchlist" class="wl-bar"></div>
 </div>
 <div id="quoteBar" class="card-bar" style="display:none"></div>
 <div class="tabs">
@@ -1510,13 +1515,18 @@ async function refreshAllQuotes() {
   try {
     const resp = await fetch("/api/quotes?secids=" + encodeURIComponent(secids.join(",")));
     const list = await resp.json();
-    if (!Array.isArray(list)) return;
+    if (!Array.isArray(list)) {
+      setStatus("实时行情获取失败，30 秒后自动重试，或点行情条 ↻ 手动刷新");
+      return;
+    }
     const map = {};
     for (const q of list) if (q && q.price != null) map[q.secid] = q;
     _watchQuotes = map;
     if (_curSecid && map[_curSecid]) renderQuoteBar(map[_curSecid]);
     renderWatchQuotes(map);
-  } catch (e) {}
+  } catch (e) {
+    setStatus("实时行情获取失败，30 秒后自动重试，或点行情条 ↻ 手动刷新");
+  }
 }
 
 function renderQuoteBar(q) {
@@ -1536,7 +1546,8 @@ function renderQuoteBar(q) {
     "<span class='qb-item'><span class='k'>PB</span><span class='v'>"+(q.pb!=null?q.pb.toFixed(2):"—")+"</span></span>" +
     "<span class='qb-item'><span class='k'>总市值</span><span class='v'>"+fmtAmount(q.mktcap)+"</span></span>" +
     "<span class='qb-item'><span class='k'>流通市值</span><span class='v'>"+fmtAmount(q.float_mktcap)+"</span></span>" +
-    "<span class='qb-time'>更新于 "+ts+"（每30秒自动刷新）</span>";
+    "<span class='qb-time'>更新于 "+ts+"</span>" +
+    "<button class='qb-refresh' onclick='refreshAllQuotes()' title='立即刷新'>↻</button>";
   qb.style.display = "";
 }
 
@@ -1729,6 +1740,14 @@ window.addEventListener("pagehide", () => {
 # ---------------------------------------------------------------------------
 # 本地 HTTP 服务
 # ---------------------------------------------------------------------------
+_pending_shutdown_ts = None  # 页面关闭标记：30 秒内无新请求才退出（防刷新/拖拽误杀）
+
+
+def _cancel_pending_shutdown():
+    global _pending_shutdown_ts
+    _pending_shutdown_ts = None
+
+
 class Handler(BaseHTTPRequestHandler):
     """查询页 + JSON API。浏览器与后端同源，后端中转东财/新浪。"""
 
@@ -1754,6 +1773,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, "text/html; charset=utf-8", text.encode("utf-8"))
 
     def do_GET(self):
+        _cancel_pending_shutdown()  # 任何请求都说明页面仍在用，取消待执行退出
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         params = urllib.parse.parse_qs(parsed.query)
@@ -1811,8 +1831,9 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 self._send_json(q)
             elif path == "/api/shutdown":
+                global _pending_shutdown_ts
+                _pending_shutdown_ts = time.time()  # 标记关闭，30 秒内无新请求才退出
                 self._send_json({"ok": True})
-                threading.Thread(target=self.server.shutdown, daemon=True).start()
             else:
                 self._send_json({"error": "404 Not Found"}, 404)
         except ConnectionError as exc:
@@ -1822,10 +1843,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         """支持页面卸载时 sendBeacon 发来的停止请求（关闭网页即停止服务）。"""
+        _cancel_pending_shutdown()
         path = urllib.parse.urlparse(self.path).path
         if path == "/api/shutdown":
+            global _pending_shutdown_ts
+            _pending_shutdown_ts = time.time()  # 标记关闭，30 秒内无新请求才退出
             self._send_json({"ok": True})
-            threading.Thread(target=self.server.shutdown, daemon=True).start()
         else:
             self._send_json({"error": "404 Not Found"}, 404)
 
@@ -1850,10 +1873,15 @@ def main():
     url = f"http://127.0.0.1:{port}/"
     print(f"[i] 服务已启动: {url}")
     print(f"[i] 浏览器已自动打开，页面上方输入股票名称查询")
-    print(f"[i] 关闭浏览器页面即停止服务（无需手动结束）")
+    print(f"[i] 关闭浏览器页面 30 秒后自动停止服务（刷新/切走不误停）")
     open_browser(url)
     try:
-        server.serve_forever()
+        server.timeout = 1
+        while True:
+            server.handle_request()
+            if _pending_shutdown_ts and time.time() - _pending_shutdown_ts > 30:
+                print("[i] 页面已关闭，服务自动停止（30 秒无访问）")
+                break
     except KeyboardInterrupt:
         print("\n[i] 服务已停止")
 
