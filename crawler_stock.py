@@ -249,17 +249,18 @@ def compute_fits(closes):
 
     返回结构：
         {"linear": {"name", "values": [...], "mae", "rmse", "r2"}, ...}
-    依赖 statsmodels/numpy；未安装或拟合失败时返回 None（前端提示不可用，
-    不影响行情功能）。
+    纯 numpy 实现，不依赖 statsmodels（该库体积大且环境易缺失）：
+    - 线性回归：最小二乘直线
+    - ARIMA(1,1,0)：一阶差分 + AR(1) 系数最小二乘估计（数学上等价）
+    - ETS：Holt 线性趋势指数平滑（α/β 网格搜索最小化 SSE）
+    数据不足或异常时返回 None（前端提示不可用，不影响行情功能）。
     """
     try:
         import numpy as np
-        from statsmodels.tsa.arima.model import ARIMA
-        from statsmodels.tsa.holtwinters import ExponentialSmoothing
     except ImportError:
         return None
 
-    y = np.array(closes, dtype=float)
+    y = np.asarray(closes, dtype=float)
     n = len(y)
     t = np.arange(n)
     if n < 10:
@@ -272,7 +273,7 @@ def compute_fits(closes):
         return [None if (v is None or (isinstance(v, float) and math.isnan(v)))
                 else round(float(v), 4) for v in vals]
 
-    # 线性回归：y = a*t + b（最小二乘；polyfit 返回 [斜率, 截距]）
+    # ---- 线性回归：y = a*t + b（polyfit 返回 [斜率, 截距]）----
     try:
         slope, intercept = np.polyfit(t, y, 1)
         results["linear"] = {"name": "线性回归",
@@ -280,23 +281,45 @@ def compute_fits(closes):
     except Exception:
         pass
 
-    # ARIMA(1,1,0)：一阶差分 + 一阶自回归，适合有趋势的价格序列
+    # ---- ARIMA(1,1,0)：diff[t] = y[t]-y[t-1]，AR(1): diff[t]=φ·diff[t-1] ----
     try:
-        model = ARIMA(y, order=(1, 1, 0))
-        fitted = model.fit()
-        vals = fitted.fittedvalues
-        vals[0] = np.nan  # 差分后首项无定义
+        diff = np.diff(y)
+        num = float(np.sum(diff[1:] * diff[:-1]))
+        den = float(np.sum(diff[:-1] ** 2))
+        phi = num / den if den > 1e-12 else 0.0
+        phi = float(np.clip(phi, -0.99, 0.99))  # 保证平稳
+        fitted = np.full(n, np.nan)
+        for i in range(2, n):
+            fitted[i] = y[i - 1] + phi * (y[i - 1] - y[i - 2])
         results["arima"] = {"name": "ARIMA(1,1,0)",
-                            "values": _clean(vals)}
+                            "values": _clean(fitted)}
     except Exception:
         pass
 
-    # ETS：Holt 线性趋势指数平滑
+    # ---- ETS：Holt 线性趋势指数平滑（α/β 网格搜索最小化 SSE）----
     try:
-        model = ExponentialSmoothing(y, trend="add", damped_trend=False)
-        fitted = model.fit()
-        results["ets"] = {"name": "ETS 指数平滑",
-                          "values": _clean(fitted.fittedvalues)}
+        def _holt(alpha, beta):
+            level = y[0]
+            trend = y[1] - y[0] if n > 1 else 0.0
+            out = np.full(n, np.nan)
+            out[0] = y[0]
+            for i in range(1, n):
+                out[i] = level + trend                     # 一步拟合
+                new_level = alpha * y[i] + (1 - alpha) * (level + trend)
+                new_trend = beta * (new_level - level) + (1 - beta) * trend
+                level, trend = new_level, new_trend
+            return out
+
+        best_a, best_b, best_sse, best_fit = 0.3, 0.1, float("inf"), None
+        for alpha in np.arange(0.05, 0.96, 0.1):
+            for beta in np.arange(0.01, 0.31, 0.05):
+                f = _holt(float(alpha), float(beta))
+                err = y[1:] - f[1:]
+                sse = float(np.sum(err ** 2))
+                if sse < best_sse:
+                    best_a, best_b, best_sse, best_fit = alpha, beta, sse, f
+        results["ets"] = {"name": f"ETS 指数平滑(α={best_a:.2f})",
+                          "values": _clean(best_fit)}
     except Exception:
         pass
 
@@ -629,7 +652,7 @@ function renderFitPanel() {
   const body = document.getElementById("fitBody");
   if (!D || !n) { body.innerHTML = "<div style='color:#bbb'>请先查询股票</div>"; return; }
   if (!D.fit || !Object.keys(D.fit).length) {
-    body.innerHTML = "<div style='color:#999'>模型拟合不可用（statsmodels 未安装或拟合失败）</div>";
+    body.innerHTML = "<div style='color:#999'>模型拟合不可用（数据不足或拟合失败）</div>";
     return;
   }
   const order = [["arima", "ARIMA 拟合"], ["linear", "线性回归"], ["ets", "ETS 指数平滑"]];
