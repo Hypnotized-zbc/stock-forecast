@@ -591,6 +591,7 @@ function drawChange() {
 const FIT_COLORS = {arima: "#dc2626", linear: "#2563eb", ets: "#16a34a"};
 
 function drawFit() {
+  ctx.clearRect(0, 0, W, H);  // 先清空画布，避免残留上一张图（如 K 线）
   if (!D || !n) { paint(currentType); return; }
   const series = [["真实收盘", D.closes, "#111827", 2.0]];
   let all = [...D.closes];
