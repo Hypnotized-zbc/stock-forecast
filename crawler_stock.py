@@ -272,14 +272,11 @@ def compute_fits(closes, dates=None, horizon=10):
     if n < 10:
         return None
 
-    # 未来 horizon 个预测日期（按最后交易日顺延自然日）
+    # 未来 horizon 个预测日期：一律从今天起算（数据源滞后时避免出现过去日期）
     try:
-        if dates and len(dates) == n:
-            last_dt = datetime.strptime(dates[-1], "%Y-%m-%d")
-            pred_dates = [(last_dt + timedelta(days=i + 1)).strftime("%Y-%m-%d")
-                          for i in range(horizon)]
-        else:
-            pred_dates = [f"D+{i + 1}" for i in range(horizon)]
+        today = datetime.now()
+        pred_dates = [(today + timedelta(days=i + 1)).strftime("%Y-%m-%d")
+                      for i in range(horizon)]
     except Exception:
         pred_dates = [f"D+{i + 1}" for i in range(horizon)]
 
@@ -314,24 +311,31 @@ def compute_fits(closes, dates=None, horizon=10):
     except Exception:
         pass
 
-    # ---- ARIMA(1,1,0)：diff[t] = y[t]-y[t-1]，AR(1): diff[t]=φ·diff[t-1] ----
+    # ---- ARIMA(1,1,0)+drift：diff[t] = c + φ·diff[t-1] ----
+    # 股票日涨跌无自相关时 φ≈0，若无常数项预测会平线；
+    # 加漂移 c（平均日涨跌）让预测反映历史趋势斜率。
     try:
         diff = [y[i] - y[i - 1] for i in range(1, n)]
-        num = sum(diff[i] * diff[i - 1] for i in range(1, len(diff)))
-        den = sum(d * d for d in diff[:-1])
+        c = sum(diff) / len(diff)  # 漂移 = 平均日涨跌
+        d0 = diff[:-1]
+        d1 = diff[1:]
+        m0 = sum(d0) / len(d0)
+        m1 = sum(d1) / len(d1)
+        num = sum((a - m0) * (b - m1) for a, b in zip(d0, d1))
+        den = sum((a - m0) ** 2 for a in d0)
         phi = num / den if den > 1e-12 else 0.0
         phi = max(-0.99, min(0.99, phi))  # 保证平稳
         fitted = [None] * n
         for i in range(2, n):
-            fitted[i] = y[i - 1] + phi * (y[i - 1] - y[i - 2])
-        # 未来 horizon 日预测：差分 AR(1) 递推外推
+            fitted[i] = y[i - 1] + c + phi * (y[i - 1] - y[i - 2])
+        # 未来 horizon 日预测：带漂移的差分 AR(1) 递推外推
         last, prev = y[-1], y[-2]
         preds = []
         for _ in range(horizon):
-            nxt = last + phi * (last - prev)
+            nxt = last + c + phi * (last - prev)
             preds.append(nxt)
             prev, last = last, nxt
-        results["arima"] = {"name": "ARIMA(1,1,0)",
+        results["arima"] = {"name": "ARIMA(1,1,0)+drift",
                             "values": _clean(fitted),
                             "predict": _clean(preds),
                             "predict_dates": pred_dates}
@@ -828,9 +832,14 @@ function drawFuture() {
   const plotW = W - padL - padR, plotH = H - padT - padB;
   const xF = i => padL + i * plotW / Math.max(1, m - 1);
 
-  // 大标题（醒目）
+  // 大标题（醒目）+ 副标题（今日与预测区间）
   fctx.fillStyle = "#111827"; fctx.font = "bold 20px sans-serif"; fctx.textAlign = "center";
-  fctx.fillText("未来 10 日预测", W / 2, 28);
+  fctx.fillText("未来 10 日预测", W / 2, 26);
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const p0 = dates[0] || "D+1";
+  const p9 = dates[dates.length-1] || "D+10";
+  fctx.font = "13px sans-serif"; fctx.fillStyle = "#888";
+  fctx.fillText("今日 " + todayStr + " ｜ 预测区间 " + p0 + " ~ " + p9, W / 2, 44);
 
   // y 范围：现价 + 所有预测
   let lo = lastClose, hi = lastClose;
@@ -885,7 +894,7 @@ function drawFuture() {
       started = true;
     }
     fctx.stroke();
-    // 圆点 + 数值
+    // 圆点 + 数值 + 末端"10日后"大标签
     fctx.font = "bold 12px sans-serif";
     for (let i = 0; i < m; i++) {
       if (mo.predict[i] == null) continue;
@@ -896,6 +905,13 @@ function drawFuture() {
       fctx.stroke();
       fctx.fillStyle = col; fctx.textAlign = "center";
       fctx.fillText(mo.predict[i].toFixed(2), x, y - 10);
+    }
+    // 末端最终预测值（大标签，醒目）
+    if (mo.predict[m-1] != null) {
+      const x = xF(m-1), y = yOf(mo.predict[m-1]);
+      fctx.font = "bold 15px sans-serif"; fctx.fillStyle = col;
+      fctx.textAlign = "center";
+      fctx.fillText("10日后 " + mo.predict[m-1].toFixed(2), x, y + 24);
     }
   }
 
