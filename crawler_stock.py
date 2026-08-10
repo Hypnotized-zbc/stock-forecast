@@ -719,6 +719,8 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   .card-bar { max-width: 1180px; margin: 10px auto 0; background: #fff; border-radius: 10px;
               box-shadow: 0 2px 8px rgba(0,0,0,.06); padding: 12px 16px;
               display: flex; flex-wrap: wrap; align-items: center; gap: 18px; font-size: 13px; }
+  .qb-name { font-size: 17px; font-weight: 700; color: #111827; }
+  .qb-code { font-size: 13px; font-weight: 400; color: #999; margin-left: 4px; }
   .qb-price { font-size: 26px; font-weight: 700; }
   .qb-item { display: flex; flex-direction: column; gap: 2px; }
   .qb-item .k { color: #999; font-size: 12px; }
@@ -727,7 +729,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   .fund-item { display: flex; flex-direction: column; gap: 2px; min-width: 90px; }
   .fund-item .k { color: #999; font-size: 12px; }
   .fund-item .v { font-weight: 600; font-size: 14px; }
-  .wl-bar { max-width: 1180px; margin: 10px auto 0; display: flex; flex-wrap: wrap; gap: 8px; }
+  .wl-bar { flex: 1; display: flex; flex-wrap: wrap; gap: 8px; min-width: 200px; }
   .wl-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px;
              background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 16px;
              font-size: 13px; color: #3730a3; cursor: pointer; }
@@ -761,11 +763,11 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     <input type="date" id="endDate">
     <button id="searchBtn">查询</button>
     <span id="status"></span>
+    <div id="watchlist" class="wl-bar"></div>
   </div>
   <div id="candidateBox"></div>
 </div>
 <div id="quoteBar" class="card-bar" style="display:none"></div>
-<div id="watchlist" class="wl-bar"></div>
 <div class="tabs">
   <button class="tab active" id="tabChart">行情图表</button>
   <button class="tab" id="tabFit">模型拟合</button>
@@ -1475,6 +1477,7 @@ async function refreshQuote() {
     const ts = [t.getHours(), t.getMinutes(), t.getSeconds()].map(x => String(x).padStart(2,"0")).join(":");
     const qb = document.getElementById("quoteBar");
     qb.innerHTML =
+      "<span class='qb-name'>"+(q.name||"—")+" <span class='qb-code'>"+(q.code||"")+"</span></span>" +
       "<span class='qb-price' style='color:"+color+"'>"+q.price.toFixed(2)+"</span>" +
       "<span class='qb-item'><span class='k'>涨跌幅</span><span class='v' style='color:"+color+"'>"+(up?"+":"")+q.change_pct.toFixed(2)+"%</span></span>" +
       "<span class='qb-item'><span class='k'>昨收</span><span class='v'>"+(q.prev_close!=null?q.prev_close.toFixed(2):"—")+"</span></span>" +
@@ -1531,8 +1534,45 @@ function removeWatch(secid) {
   saveWatch(); renderWatchlist();
 }
 
+// ---- K线缓存：已下载过的股票（含自选股）当日不再重复下载 ----
+function cacheKey(secid) {
+  const s = document.getElementById("startDate").value;
+  const e = document.getElementById("endDate").value;
+  return "kline_" + secid + "_" + s + "_" + e;
+}
+function getKlineCache(secid) {
+  try {
+    const raw = localStorage.getItem(cacheKey(secid));
+    if (!raw) return null;
+    const o = JSON.parse(raw);
+    if (!o.ts || Date.now() - o.ts > 24*3600*1000) {
+      localStorage.removeItem(cacheKey(secid));
+      return null;
+    }
+    return o.data;
+  } catch (e) { return null; }
+}
+function setKlineCache(secid, data) {
+  try {
+    localStorage.setItem(cacheKey(secid), JSON.stringify({ts: Date.now(), data: data}));
+    // 清理：kline_ 缓存超过 20 个时删最旧一半
+    const keys = Object.keys(localStorage).filter(k => k.startsWith("kline_"));
+    if (keys.length > 20) {
+      keys.sort((a, b) => (JSON.parse(localStorage.getItem(a)).ts || 0) -
+                          (JSON.parse(localStorage.getItem(b)).ts || 0));
+      for (let i = 0; i < 10; i++) localStorage.removeItem(keys[i]);
+    }
+  } catch (e) {}
+}
+
 async function doKline(idx) {
   const c = window._cands[idx];
+  const cached = getKlineCache(c.secid);
+  if (cached) {
+    setChartData(cached, c["名称"], c.secid);
+    setStatus("已用今日缓存数据（无需重新下载）");
+    return;
+  }
   const s = document.getElementById("startDate").value;
   const e = document.getElementById("endDate").value;
   setStatus("下载 " + c["名称"] + " 数据中（约需 10~30 秒）...");
@@ -1543,6 +1583,7 @@ async function doKline(idx) {
                              "&start=" + s + "&end=" + e, {signal: ctrl.signal});
     const data = await resp.json();
     if (data.error) { setStatus("下载失败: " + data.error); return; }
+    setKlineCache(c.secid, data);
     setChartData(data, c["名称"], c.secid);
   } catch (err) {
     setStatus("请求异常或超时: " + err);
@@ -1551,8 +1592,14 @@ async function doKline(idx) {
   }
 }
 
-// 自选股直接打开（跳过搜索）
+// 自选股直接打开（跳过搜索；命中缓存不重新下载）
 async function doKlineSecid(secid, name) {
+  const cached = getKlineCache(secid);
+  if (cached) {
+    setChartData(cached, name, secid);
+    setStatus("已用今日缓存数据（无需重新下载）");
+    return;
+  }
   const s = document.getElementById("startDate").value;
   const e = document.getElementById("endDate").value;
   setStatus("下载 " + name + " 数据中（约需 10~30 秒）...");
@@ -1563,6 +1610,7 @@ async function doKlineSecid(secid, name) {
                              "&start=" + s + "&end=" + e, {signal: ctrl.signal});
     const data = await resp.json();
     if (data.error) { setStatus("下载失败: " + data.error); return; }
+    setKlineCache(secid, data);
     setChartData(data, name, secid);
   } catch (err) {
     setStatus("请求异常或超时: " + err);
