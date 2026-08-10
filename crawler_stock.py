@@ -244,6 +244,142 @@ def build_chart_data(rows):
     }
 
 
+def _cholesky_solve(A, b):
+    """Cholesky 求解对称正定方程组 A·x = b（纯 Python）。
+
+    A: 二维 list，b: list。返回 x: list。
+    """
+    n = len(A)
+    L = [[0.0] * n for _ in range(n)]
+    for i in range(n):
+        for j in range(i + 1):
+            s = A[i][j] - sum(L[i][k] * L[j][k] for k in range(j))
+            if i == j:
+                if s <= 1e-15:
+                    s = 1e-15
+                L[i][j] = s ** 0.5
+            else:
+                L[i][j] = s / L[j][j]
+    y = [0.0] * n
+    for i in range(n):
+        y[i] = (b[i] - sum(L[i][k] * y[k] for k in range(i))) / L[i][i]
+    x = [0.0] * n
+    for i in range(n - 1, -1, -1):
+        x[i] = (y[i] - sum(L[j][i] * x[j] for j in range(i + 1, n))) / L[i][i]
+    return x
+
+
+def _prophet_light(y, horizon):
+    """Prophet 轻量版：线性趋势 + 变点（分段斜率）+ 傅里叶周度季节。
+
+    核心思想同 Meta Prophet：y = trend(t) + season(t) + eps，
+    最小二乘一次性解出全部系数，预测 = 设计矩阵外推 × 系数。
+    """
+    n = len(y)
+    ts = list(range(n))
+    ncp = 3  # 变点数（数据前 80% 内等分）
+    cps = [int(0.2 * n + (0.6 * n) * (k + 1) / (ncp + 1)) for k in range(ncp)]
+
+    def design(t):
+        row = [1.0, float(t)]
+        row += [float(max(0, t - cp)) for cp in cps]
+        for k in (1, 2):  # 周度傅里叶（日频数据周季节最明显）
+            row.append(math.cos(2 * math.pi * k * t / 7.0))
+            row.append(math.sin(2 * math.pi * k * t / 7.0))
+        return row
+
+    X = [design(t) for t in ts]
+    p = len(X[0])
+    Xt = [[X[i][j] for i in range(n)] for j in range(p)]
+    A = [[sum(Xt[a][i] * X[i][b] for i in range(n)) for b in range(p)] for a in range(p)]
+    rhs = [sum(Xt[a][i] * y[i] for i in range(n)) for a in range(p)]
+    beta = _cholesky_solve(A, rhs)
+
+    fitted = [sum(beta[j] * X[i][j] for j in range(p)) for i in range(n)]
+    pred_ts = list(range(n, n + horizon))
+    Xp = [design(t) for t in pred_ts]
+    preds = [sum(beta[j] * Xp[i][j] for j in range(p)) for i in range(horizon)]
+    return fitted, preds
+
+
+def _svr_krr(y, horizon):
+    """SVR 轻量版：RBF 核岭回归（核方法，等价 ε-SVR 的平滑近似）。
+
+    K_ij = exp(-γ(t_i-t_j)²)，α = (K+λI)⁻¹y，
+    拟合 = K·α，预测 = 核外推·α。
+    """
+    n = len(y)
+    ts = [float(t) / max(1, n - 1) for t in range(n)]  # 归一化
+    sigma = 0.25
+    gamma = 1.0 / (2 * sigma * sigma)
+
+    K = [[math.exp(-gamma * (ts[i] - ts[j]) ** 2) for j in range(n)] for i in range(n)]
+    lam = 0.01
+    A = [[K[i][j] + (lam if i == j else 0.0) for j in range(n)] for i in range(n)]
+    alpha = _cholesky_solve(A, list(y))
+
+    fitted = [sum(K[i][j] * alpha[j] for j in range(n)) for i in range(n)]
+    p_ts = [float(t) / max(1, n - 1) for t in range(n, n + horizon)]
+    preds = []
+    for pt in p_ts:
+        k_row = [math.exp(-gamma * (pt - ts[j]) ** 2) for j in range(n)]
+        preds.append(sum(k_row[j] * alpha[j] for j in range(n)))
+    return fitted, preds
+
+
+def _rf_light(y, horizon, n_trees=30, max_depth=8, seed=7):
+    """随机森林轻量版：决策树回归 + bagging（手写，无 sklearn）。
+
+    特征：归一化时间 t ∈ [0,1]。单特征递归分裂（最小化 MSE），
+    每棵树用随机 60% 子样本训练；预测 = 树输出均值。
+    树无法外推：预测超出训练范围时取末端叶子均值（趋势趋平）。
+    """
+    import random
+    rng = random.Random(seed)
+    n = len(y)
+    ts = [float(t) / max(1, n - 1) for t in range(n)]
+
+    def build_tree(idx, depth):
+        # idx: 样本下标列表
+        if depth >= max_depth or len(idx) < 5:
+            return ("leaf", sum(y[i] for i in idx) / len(idx))
+        best = None
+        cand = sorted(set(ts[i] for i in idx))
+        if len(cand) < 2:
+            return ("leaf", sum(y[i] for i in idx) / len(idx))
+        for t0 in cand[:-1]:
+            left = [i for i in idx if ts[i] <= t0]
+            right = [i for i in idx if ts[i] > t0]
+            if not left or not right:
+                continue
+            ml = sum(y[i] for i in left) / len(left)
+            mr = sum(y[i] for i in right) / len(right)
+            loss = sum((y[i] - ml) ** 2 for i in left) + sum((y[i] - mr) ** 2 for i in right)
+            if best is None or loss < best[0]:
+                best = (loss, t0, left, right)
+        if best is None:
+            return ("leaf", sum(y[i] for i in idx) / len(idx))
+        _, t0, left, right = best
+        return ("node", t0, build_tree(left, depth + 1), build_tree(right, depth + 1))
+
+    def predict_tree(tree, t):
+        while tree[0] == "node":
+            tree = tree[2] if t <= tree[1] else tree[3]
+        return tree[1]
+
+    trees = []
+    for _ in range(n_trees):
+        sample = [i for i in range(n) if rng.random() < 0.6]
+        if len(sample) < 10:
+            sample = list(range(n))
+        trees.append(build_tree(sample, 0))
+
+    fitted = [sum(predict_tree(t, ts[i]) for t in trees) / n_trees for i in range(n)]
+    preds = [sum(predict_tree(t, float(x) / max(1, n - 1)) for t in trees) / n_trees
+             for x in range(n, n + horizon)]
+    return fitted, preds
+
+
 def compute_fits(closes, dates=None, horizon=10):
     """对收盘价序列做三种模型拟合（in-sample）+ 未来 horizon 日预测。
 
@@ -376,6 +512,36 @@ def compute_fits(closes, dates=None, horizon=10):
                           "values": _clean(best_fit),
                           "predict": _clean(preds),
                           "predict_dates": pred_dates}
+    except Exception:
+        pass
+
+    # ---- Prophet 轻量版：趋势 + 变点 + 傅里叶季节 ----
+    try:
+        pf, pp = _prophet_light(y, horizon)
+        results["prophet"] = {"name": "Prophet(轻量)",
+                              "values": _clean(pf),
+                              "predict": _clean(pp),
+                              "predict_dates": pred_dates}
+    except Exception:
+        pass
+
+    # ---- SVR 轻量版：RBF 核岭回归 ----
+    try:
+        sf, sp = _svr_krr(y, horizon)
+        results["svr"] = {"name": "SVR(核岭回归)",
+                          "values": _clean(sf),
+                          "predict": _clean(sp),
+                          "predict_dates": pred_dates}
+    except Exception:
+        pass
+
+    # ---- 随机森林轻量版：决策树 bagging ----
+    try:
+        rf, rp = _rf_light(y, horizon)
+        results["rf"] = {"name": "随机森林(轻量)",
+                         "values": _clean(rf),
+                         "predict": _clean(rp),
+                         "predict_dates": pred_dates}
     except Exception:
         pass
 
@@ -683,8 +849,10 @@ function drawChange() {
   legend("<span><i style='color:"+UP+"'>■</i> 上涨</span><span><i style='color:"+DOWN+"'>■</i> 下跌</span><span>单位：%</span>");
 }
 
-// ---- 模型拟合图（真实收盘 + ARIMA + ETS）----
-const FIT_COLORS = {arima: "#dc2626", ets: "#16a34a"};
+// ---- 模型拟合图（真实收盘 + 5 个模型）----
+const FIT_COLORS = {arima: "#dc2626", ets: "#16a34a", prophet: "#f59e0b",
+                    svr: "#8b5cf6", rf: "#06b6d4"};
+const FIT_ORDER = ["arima", "ets", "prophet", "svr", "rf"];
 
 function drawFit() {
   ctx.clearRect(0, 0, W, H);  // 先清空画布，避免残留上一张图（如 K 线）
@@ -692,9 +860,9 @@ function drawFit() {
   const series = [["真实收盘", D.closes, "#111827", 2.0]];
   let all = [...D.closes];
   if (D.fit) {
-    for (const k of ["arima", "ets"]) {
+    for (const k of FIT_ORDER) {
       if (D.fit[k]) {
-        series.push([D.fit[k].name, D.fit[k].values, FIT_COLORS[k], 1.6]);
+        series.push([D.fit[k].name, D.fit[k].values, FIT_COLORS[k], 1.5]);
         all = all.concat(D.fit[k].values.filter(v=>v!=null));
       }
     }
@@ -714,7 +882,7 @@ function drawFit() {
   }
   let lg = "<span><i style='color:#111827'>—</i> 真实收盘</span>";
   if (D.fit) {
-    for (const k of ["arima", "ets"]) {
+    for (const k of FIT_ORDER) {
       if (D.fit[k]) lg += "<span><i style='color:"+FIT_COLORS[k]+"'>—</i> "+D.fit[k].name+"</span>";
     }
   }
@@ -728,7 +896,9 @@ function renderFitPanel() {
     body.innerHTML = "<div style='color:#999'>模型拟合不可用（数据不足或拟合失败）</div>";
     return;
   }
-  const order = [["arima", "ARIMA 拟合"], ["ets", "ETS 指数平滑"]];
+  const order = [["arima", "ARIMA 拟合"], ["ets", "ETS 指数平滑"],
+                 ["prophet", "Prophet 拟合"], ["svr", "SVR 拟合"],
+                 ["rf", "随机森林拟合"]];
   let html = "";
   for (const [k, title] of order) {
     const m = D.fit[k];
@@ -757,7 +927,10 @@ function drawFuture() {
   if (!D || !D.fit || !D.fit.arima || !D.fit.arima.predict) return;
   const lastClose = D.closes[D.closes.length-1];
   const models = [["ARIMA(1,1,0)", D.fit.arima, "#dc2626"],
-                  ["ETS 指数平滑", D.fit.ets, "#16a34a"]];
+                  ["ETS 指数平滑", D.fit.ets, "#16a34a"],
+                  ["Prophet(轻量)", D.fit.prophet, "#f59e0b"],
+                  ["SVR(核岭)", D.fit.svr, "#8b5cf6"],
+                  ["随机森林", D.fit.rf, "#06b6d4"]];
   const m = 10;  // 未来 10 日
   const dates = D.fit.arima.predict_dates || [];
   const padL = 70, padR = 24, padT = 60, padB = 46;
@@ -868,7 +1041,11 @@ function renderFuturePanel() {
     return;
   }
   const lastClose = D.closes[D.closes.length-1];
-  const models = [["arima", "ARIMA(1,1,0)", "#dc2626"], ["ets", "ETS 指数平滑", "#16a34a"]];
+  const models = [["arima", "ARIMA(1,1,0)", "#dc2626"],
+                  ["ets", "ETS 指数平滑", "#16a34a"],
+                  ["prophet", "Prophet(轻量)", "#f59e0b"],
+                  ["svr", "SVR(核岭)", "#8b5cf6"],
+                  ["rf", "随机森林", "#06b6d4"]];
   let html = "";
   for (const [k, title, col] of models) {
     const mo = D.fit[k];
