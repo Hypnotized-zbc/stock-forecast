@@ -89,15 +89,22 @@ def main():
                    json={"content": content, "encoding": "base64"})
         blobs[rel] = blob["sha"]
 
-    # 3. 构造树：保留远程已有条目，更新/新增本地文件
+    # 3. 构造树：保留远程已有条目，更新/新增本地文件；
+    #    远程有而本地已删除的文件自动剔除（保持远程与本地一致）
     base_tree = None
     tree_items = []
+    local_set = set(files)
     if head:
         tree = api(s, "GET", f"{API}/git/trees/{head}?recursive=1")
         base_tree = tree["sha"]
         for entry in tree["tree"]:
             if entry["type"] == "tree" or entry["path"] in blobs:
                 continue  # 目录或将被替换的文件
+            if entry["path"] not in local_set:
+                print(f"删除远程文件: {entry['path']}")
+                tree_items.append({"path": entry["path"], "mode": "100644",
+                                   "type": "blob", "sha": None})
+                continue
             tree_items.append({"path": entry["path"], "mode": entry["mode"],
                                "type": "blob", "sha": entry["sha"]})
     for rel, sha in blobs.items():
