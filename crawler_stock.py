@@ -244,12 +244,12 @@ def build_chart_data(rows):
     }
 
 
-def compute_fits(closes, dates=None):
-    """对收盘价序列做三种模型拟合（in-sample）+ 未来5日预测。
+def compute_fits(closes, dates=None, horizon=10):
+    """对收盘价序列做三种模型拟合（in-sample）+ 未来 horizon 日预测。
 
     返回结构：
         {"linear": {"name", "values": [...], "mae", "rmse", "r2"}, ...}
-        每个模型含 "predict": [5个预测值], "predict_dates": [5个日期]
+        每个模型含 "predict": [horizon 个预测值], "predict_dates": [horizon 个日期]
     纯 Python 实现，零第三方依赖（只需 requests），任何环境可跑：
     - 线性回归：最小二乘直线（手写公式）
     - ARIMA(1,1,0)：一阶差分 + AR(1) 系数最小二乘估计（数学上等价）
@@ -272,16 +272,16 @@ def compute_fits(closes, dates=None):
     if n < 10:
         return None
 
-    # 未来 5 个预测日期（按最后交易日顺延自然日）
+    # 未来 horizon 个预测日期（按最后交易日顺延自然日）
     try:
         if dates and len(dates) == n:
             last_dt = datetime.strptime(dates[-1], "%Y-%m-%d")
             pred_dates = [(last_dt + timedelta(days=i + 1)).strftime("%Y-%m-%d")
-                          for i in range(5)]
+                          for i in range(horizon)]
         else:
-            pred_dates = [f"D+{i + 1}" for i in range(5)]
+            pred_dates = [f"D+{i + 1}" for i in range(horizon)]
     except Exception:
-        pred_dates = [f"D+{i + 1}" for i in range(5)]
+        pred_dates = [f"D+{i + 1}" for i in range(horizon)]
 
     def _clean(vals):
         """None/非数值 → None，其余保留 4 位小数（json.dumps 输出 NaN 非法 JSON）。"""
@@ -324,10 +324,10 @@ def compute_fits(closes, dates=None):
         fitted = [None] * n
         for i in range(2, n):
             fitted[i] = y[i - 1] + phi * (y[i - 1] - y[i - 2])
-        # 未来 5 日预测：差分 AR(1) 递推外推
+        # 未来 horizon 日预测：差分 AR(1) 递推外推
         last, prev = y[-1], y[-2]
         preds = []
-        for _ in range(5):
+        for _ in range(horizon):
             nxt = last + phi * (last - prev)
             preds.append(nxt)
             prev, last = last, nxt
@@ -361,13 +361,13 @@ def compute_fits(closes, dates=None):
                 sse = sum((y[i] - f[i]) ** 2 for i in range(1, n))
                 if sse < best_sse:
                     best_a, best_b, best_sse, best_fit = alpha, beta, sse, f
-        # 未来 5 日预测：用最优 α/β 递推至末尾状态，水平+趋势外推
+        # 未来 horizon 日预测：用最优 α/β 递推至末尾状态，水平+趋势外推
         level, trend = y[0], y[1] - y[0] if n > 1 else 0.0
         for i in range(1, n):
             new_level = best_a * y[i] + (1 - best_a) * (level + trend)
             new_trend = best_b * (new_level - level) + (1 - best_b) * trend
             level, trend = new_level, new_trend
-        preds = [level + (k + 1) * trend for k in range(5)]
+        preds = [level + (k + 1) * trend for k in range(horizon)]
         results["ets"] = {"name": f"ETS 指数平滑(α={best_a:.2f})",
                           "values": _clean(best_fit),
                           "predict": _clean(preds),
@@ -494,6 +494,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
 <div class="tabs">
   <button class="tab active" id="tabChart">行情图表</button>
   <button class="tab" id="tabFit">模型拟合</button>
+  <button class="tab" id="tabFuture">未来预测</button>
 </div>
 <div class="row2" id="chartControls">
   <select id="chartType">
@@ -508,12 +509,17 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
 <div class="wrap">
   <div class="chart-col">
     <canvas id="chart"></canvas>
+    <canvas id="futureChart" style="display:none"></canvas>
     <div class="legend" id="legend"></div>
   </div>
   <div id="tip">查询后鼠标移到图上查看每日数据</div>
   <div id="fitPanel" style="display:none">
     <div class="f-title">模型拟合结果</div>
     <div id="fitBody"></div>
+  </div>
+  <div id="futurePanel" style="display:none">
+    <div class="f-title">未来10日预测</div>
+    <div id="futureBody"></div>
   </div>
 </div>
 <script>
@@ -803,22 +809,159 @@ function renderFitPanel() {
   body.innerHTML = html;
 }
 
+// ---- 未来预测画布（独立，画得醒目）----
+const fcv = document.getElementById("futureChart");
+const fctx = fcv.getContext("2d");
+fcv.width = W * dpr; fcv.height = H * dpr;
+fcv.style.width = W + "px"; fcv.style.height = H + "px";
+fctx.scale(dpr, dpr);
+
+function drawFuture() {
+  fctx.clearRect(0, 0, W, H);
+  if (!D || !D.fit || !D.fit.arima || !D.fit.arima.predict) return;
+  const lastClose = D.closes[D.closes.length-1];
+  const models = [["ARIMA(1,1,0)", D.fit.arima, "#dc2626"],
+                  ["ETS 指数平滑", D.fit.ets, "#16a34a"]];
+  const m = 10;  // 未来 10 日
+  const dates = D.fit.arima.predict_dates || [];
+  const padL = 70, padR = 24, padT = 60, padB = 46;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const xF = i => padL + i * plotW / Math.max(1, m - 1);
+
+  // 大标题（醒目）
+  fctx.fillStyle = "#111827"; fctx.font = "bold 20px sans-serif"; fctx.textAlign = "center";
+  fctx.fillText("未来 10 日预测", W / 2, 28);
+
+  // y 范围：现价 + 所有预测
+  let lo = lastClose, hi = lastClose;
+  for (const [nm, mo, col] of models) {
+    if (!mo || !mo.predict) continue;
+    for (const v of mo.predict) {
+      if (v == null) continue;
+      lo = Math.min(lo, v); hi = Math.max(hi, v);
+    }
+  }
+  const pad = (hi - lo) * 0.15 || 1;
+  lo -= pad; hi += pad;
+  const yOf = v => padT + (hi - v) * plotH / (hi - lo);
+
+  // 未来区背景（淡黄，醒目）
+  fctx.fillStyle = "rgba(255, 235, 160, 0.25)";
+  fctx.fillRect(padL, padT, plotW, plotH);
+
+  // 网格 + y 轴
+  fctx.strokeStyle = "#e8e8e8"; fctx.fillStyle = "#888"; fctx.font = "12px sans-serif";
+  for (let t = 0; t <= 5; t++) {
+    const v = lo + (hi - lo) * t / 5;
+    const y = yOf(v);
+    fctx.beginPath(); fctx.moveTo(padL, y); fctx.lineTo(W - padR, y); fctx.stroke();
+    fctx.textAlign = "right"; fctx.fillText(v.toFixed(2), padL - 8, y + 4);
+  }
+
+  // x 轴日期（MM-DD）
+  fctx.textAlign = "center";
+  for (let i = 0; i < m; i++) {
+    const dt = dates[i] ? dates[i].slice(5) : ("+" + (i + 1));
+    fctx.fillText(dt, xF(i), H - padB + 18);
+  }
+
+  // 现价基准线（黑色虚线，醒目）
+  fctx.strokeStyle = "#111827"; fctx.lineWidth = 1.6; fctx.setLineDash([6, 4]);
+  fctx.beginPath(); fctx.moveTo(padL, yOf(lastClose)); fctx.lineTo(W - padR, yOf(lastClose)); fctx.stroke();
+  fctx.setLineDash([]);
+  fctx.fillStyle = "#111827"; fctx.font = "bold 13px sans-serif"; fctx.textAlign = "left";
+  fctx.fillText("现价 " + lastClose.toFixed(2), padL + 6, yOf(lastClose) - 6);
+
+  // 预测线（粗线 + 大圆点 + 数值标注）
+  for (const [nm, mo, col] of models) {
+    if (!mo || !mo.predict) continue;
+    // 连线
+    fctx.strokeStyle = col; fctx.lineWidth = 3; fctx.beginPath();
+    let started = false;
+    for (let i = 0; i < m; i++) {
+      if (mo.predict[i] == null) { started = false; continue; }
+      const x = xF(i), y = yOf(mo.predict[i]);
+      started ? fctx.lineTo(x, y) : fctx.moveTo(x, y);
+      started = true;
+    }
+    fctx.stroke();
+    // 圆点 + 数值
+    fctx.font = "bold 12px sans-serif";
+    for (let i = 0; i < m; i++) {
+      if (mo.predict[i] == null) continue;
+      const x = xF(i), y = yOf(mo.predict[i]);
+      fctx.fillStyle = col;
+      fctx.beginPath(); fctx.arc(x, y, 4.5, 0, Math.PI * 2); fctx.fill();
+      fctx.strokeStyle = "#fff"; fctx.lineWidth = 1.5;
+      fctx.stroke();
+      fctx.fillStyle = col; fctx.textAlign = "center";
+      fctx.fillText(mo.predict[i].toFixed(2), x, y - 10);
+    }
+  }
+
+  // 图例（画在 canvas 右上角，醒目）
+  fctx.font = "bold 13px sans-serif"; fctx.textAlign = "right";
+  let ly = 26;
+  fctx.fillStyle = "#111827";
+  fctx.fillText("— 现价", W - padR - 6, ly); ly += 18;
+  for (const [nm, mo, col] of models) {
+    if (!mo || !mo.predict) continue;
+    fctx.fillStyle = col;
+    fctx.fillText("— " + nm, W - padR - 6, ly);
+    ly += 18;
+  }
+}
+
+function renderFuturePanel() {
+  const body = document.getElementById("futureBody");
+  if (!D || !n) { body.innerHTML = "<div style='color:#bbb'>请先查询股票</div>"; return; }
+  if (!D.fit || !D.fit.arima || !D.fit.arima.predict) {
+    body.innerHTML = "<div style='color:#999'>模型拟合不可用（数据不足或拟合失败）</div>";
+    return;
+  }
+  const lastClose = D.closes[D.closes.length-1];
+  const models = [["arima", "ARIMA(1,1,0)", "#dc2626"], ["ets", "ETS 指数平滑", "#16a34a"]];
+  let html = "";
+  for (const [k, title, col] of models) {
+    const mo = D.fit[k];
+    if (!mo || !mo.predict) continue;
+    const lastPred = mo.predict[mo.predict.length-1];
+    const up = lastPred >= lastClose;
+    const chg = ((lastPred - lastClose) / lastClose * 100).toFixed(2);
+    html += "<div class='f-row'><span class='f-name'><span class='swatch' style='background:"+col+"'></span>"+title+"</span></div>";
+    html += "<div class='f-dir' style='color:"+(up?UP:DOWN)+"'>10日后方向："+(up?"上涨 ↑":"下跌 ↓")+"（"+chg+"%）</div>";
+    for (let i = 0; i < mo.predict.length; i++) {
+      const dt = mo.predict_dates && mo.predict_dates[i] ? mo.predict_dates[i].slice(5) : ("D+"+(i+1));
+      const dv = ((mo.predict[i] - lastClose) / lastClose * 100);
+      const cls = dv >= 0 ? "up" : "down";
+      html += "<div class='f-pred'><span>"+dt+"</span><span>"+fmt(mo.predict[i])+
+              " <span class='"+cls+"'>("+dv.toFixed(2)+"%)</span></span></div>";
+    }
+  }
+  body.innerHTML = html;
+}
+
 // ---- 视图切换 ----
 let view = "chart";
 function switchView(v) {
   view = v;
   document.getElementById("tabChart").className = v==="chart" ? "tab active" : "tab";
   document.getElementById("tabFit").className = v==="fit" ? "tab active" : "tab";
+  document.getElementById("tabFuture").className = v==="future" ? "tab active" : "tab";
   document.getElementById("chartControls").style.display = v==="chart" ? "" : "none";
-  document.getElementById("legend").style.display = v==="chart" ? "" : "none";
+  document.getElementById("legend").style.display = v==="chart" || v==="fit" ? "" : "none";
   document.getElementById("tip").style.display = v==="chart" ? "" : "none";
-  const fp = document.getElementById("fitPanel");
-  fp.style.display = v==="fit" ? "" : "none";
+  document.getElementById("chart").style.display = v==="chart" ? "" : "none";
+  document.getElementById("futureChart").style.display = v==="future" ? "" : "none";
+  document.getElementById("fitPanel").style.display = v==="fit" ? "" : "none";
+  document.getElementById("futurePanel").style.display = v==="future" ? "" : "none";
   if (v==="fit") { renderFitPanel(); drawFit(); }
+  else if (v==="future") { renderFuturePanel(); drawFuture(); }
   else paint(currentType);
 }
 document.getElementById("tabChart").addEventListener("click", () => switchView("chart"));
 document.getElementById("tabFit").addEventListener("click", () => switchView("fit"));
+document.getElementById("tabFuture").addEventListener("click", () => switchView("future"));
 
 function legend(html) { document.getElementById("legend").innerHTML = html; }
 
