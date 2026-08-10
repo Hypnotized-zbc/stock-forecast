@@ -43,3 +43,12 @@
 - 鼠标悬浮显示当日 OHLCV/MA/BOLL 明细
 - 自动用 Windows 默认浏览器打开（explorer.exe + UNC 路径）
 - 实测：茅台 242 条日K → data/chart_*.html 生成并在 Edge 中打开
+
+## v0.4.1 (2026-08-10)
+- K线图去掉叠加指标，改为纯蜡烛图（清晰度优化）；MA5/BOLL 保留独立选项
+- 高清屏适配：canvas 按 devicePixelRatio 放大，高分屏不再模糊
+- 网格线淡化、Y轴字号增大
+- 鼠标悬停：重绘当前图 + 虚线十字线定位当日
+- 蜡烛宽度略增（0.62 → 0.68）
+- 验证：Edge CDP 实际渲染 5 种图全部成功、无 JS 错误（kline 39346px /
+  ma5 32284px / boll 151659px / vol 97661px / change 46758px）

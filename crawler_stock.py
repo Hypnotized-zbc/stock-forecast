@@ -221,7 +221,7 @@ CHART_TEMPLATE = """<!DOCTYPE html>
 <div class="header">
   <h2>__NAME__ 近一年行情</h2>
   <select id="chartType">
-    <option value="kline">K线图（含MA5/MA20/BOLL）</option>
+    <option value="kline">K线图（蜡烛图）</option>
     <option value="ma5">5日均线图</option>
     <option value="boll">布林带 BOLL 图</option>
     <option value="vol">成交量 VOL 图</option>
@@ -242,14 +242,17 @@ const W = 1140, H = 620, PAD = {L:64, R:20, T:24, B:42};
 
 const cv = document.getElementById("chart");
 const ctx = cv.getContext("2d");
-cv.width = W; cv.height = H;
+// 高清屏适配：画布按 devicePixelRatio 放大，避免高分屏模糊
+const dpr = window.devicePixelRatio || 1;
+cv.width = W * dpr; cv.height = H * dpr;
+cv.style.width = W + "px"; cv.style.height = H + "px";
+ctx.scale(dpr, dpr);
+ctx.lineWidth = 1;
 
 const fmt = (v, d=2) => (v==null || isNaN(v)) ? "-" : Number(v).toFixed(d);
 
 function priceMinMax() {{
-  let lo = Math.min(...D.lows), hi = Math.max(...D.highs);
-  const mids = D.boll_mid.filter(v=>v!=null);
-  if (mids.length) {{ lo = Math.min(lo, Math.min(...D.boll_low.filter(v=>v!=null))); hi = Math.max(hi, Math.max(...D.boll_up.filter(v=>v!=null))); }}
+  const lo = Math.min(...D.lows), hi = Math.max(...D.highs);
   const pad = (hi-lo)*0.06 || 1; return [lo-pad, hi+pad];
 }}
 function seriesMinMax(arr, padRatio) {{
@@ -262,7 +265,7 @@ function xOf(i) {{ return PAD.L + i * (W-PAD.L-PAD.R) / Math.max(1,n-1); }}
 function yOf(v, mn, mx) {{ return PAD.T + (mx-v) * (H-PAD.T-PAD.B) / (mx-mn); }}
 
 function drawAxes(mn, mx, ticks) {{
-  ctx.strokeStyle = "#e5e5e5"; ctx.fillStyle = "#999"; ctx.font = "11px sans-serif"; ctx.lineWidth = 1;
+  ctx.strokeStyle = "#f0f0f0"; ctx.fillStyle = "#888"; ctx.font = "12px sans-serif"; ctx.lineWidth = 1;
   for (let t=0; t<=ticks; t++) {{
     const v = mn + (mx-mn)*t/ticks;
     const y = yOf(v, mn, mx);
@@ -277,12 +280,30 @@ function drawAxes(mn, mx, ticks) {{
   }}
 }}
 
+let currentType = "kline";
+function paint(type) {{
+  ctx.clearRect(0, 0, W, H);
+  if (type=="kline") drawKline();
+  else if (type=="ma5") drawMA5();
+  else if (type=="boll") drawBOLL();
+  else if (type=="vol") drawVol();
+  else drawChange();
+}}
+function drawCrosshair(i) {{
+  const x = xOf(i);
+  ctx.strokeStyle = "rgba(0,0,0,0.22)"; ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath(); ctx.moveTo(x, PAD.T); ctx.lineTo(x, H-PAD.B); ctx.stroke();
+  ctx.setLineDash([]);
+}}
 function drawTooltip() {{
   cv.onmousemove = e => {{
     const rect = cv.getBoundingClientRect();
     const px = (e.clientX-rect.left) * W / rect.width;
     const i = Math.round((px-PAD.L) * Math.max(1,n-1) / (W-PAD.L-PAD.R));
     if (i<0 || i>=n) return;
+    paint(currentType);
+    drawCrosshair(i);
     const ch = D.changes[i];
     const cls = ch>=0 ? 'up' : 'down';
     document.getElementById("tip").innerHTML =
@@ -295,11 +316,11 @@ function drawTooltip() {{
 
 function legend(html) {{ document.getElementById("legend").innerHTML = html; }}
 
-// ---- K线 + MA + BOLL ----
+// ---- K线（纯蜡烛，不叠加指标） ----
 function drawKline() {{
   const [mn, mx] = priceMinMax();
   drawAxes(mn, mx, 5);
-  const bw = Math.max(1.2, (W-PAD.L-PAD.R)/n*0.62);
+  const bw = Math.max(1.5, (W-PAD.L-PAD.R)/n*0.68);
   for (let i=0; i<n; i++) {{
     const up = D.closes[i] >= D.opens[i];
     ctx.strokeStyle = ctx.fillStyle = up ? UP : DOWN;
@@ -312,28 +333,8 @@ function drawKline() {{
     const y1 = Math.min(yO,yC), h1 = Math.max(1, Math.abs(yC-yO));
     ctx.fillRect(x-bw/2, y1, bw, h1);
   }}
-  // 指标线
-  const lines = [["MA5", D.ma5, "#3b82f6"], ["MA20", D.ma20, "#f59e0b"],
-                 ["BOLL上", D.boll_up, "#e03434"], ["BOLL中", D.boll_mid, "#9ca3af"],
-                 ["BOLL下", D.boll_low, "#089981"]];
-  for (const [nm, arr, color] of lines) {{
-    ctx.strokeStyle = color; ctx.lineWidth = 1.2; ctx.beginPath();
-    let started = false;
-    for (let i=0; i<n; i++) {{
-      if (arr[i]==null) {{ started = false; continue; }}
-      const x = xOf(i), y = yOf(arr[i], mn, mx);
-      started ? ctx.lineTo(x,y) : ctx.moveTo(x,y);
-      started = true;
-    }}
-    ctx.stroke();
-  }}
   legend("<span><i style='color:"+UP+"'>■</i> 涨</span>"+
-         "<span><i style='color:"+DOWN+"'>■</i> 跌</span>"+
-         "<span><i style='color:#3b82f6'>—</i> MA5</span>"+
-         "<span><i style='color:#f59e0b'>—</i> MA20</span>"+
-         "<span><i style='color:#e03434'>—</i> BOLL上</span>"+
-         "<span><i style='color:#9ca3af'>—</i> BOLL中</span>"+
-         "<span><i style='color:#089981'>—</i> BOLL下</span>");
+         "<span><i style='color:"+DOWN+"'>■</i> 跌</span>");
 }}
 
 // ---- 5日均线图 ----
@@ -421,21 +422,14 @@ function drawChange() {{
   legend("<span><i style='color:"+UP+"'>■</i> 上涨</span><span><i style='color:"+DOWN+"'>■</i> 下跌</span><span>单位：%</span>");
 }}
 
-function redraw() {{
-  ctx.clearRect(0,0,W,H);
-  const t = document.getElementById("chartType").value;
-  if (t=="kline") drawKline();
-  else if (t=="ma5") drawMA5();
-  else if (t=="boll") drawBOLL();
-  else if (t=="vol") drawVol();
-  else drawChange();
-}}
-
-document.getElementById("chartType").addEventListener("change", redraw);
+document.getElementById("chartType").addEventListener("change", e => {
+  currentType = e.target.value;
+  paint(currentType);
+});
 document.getElementById("rangeInfo").textContent =
   D.dates[0] + " ~ " + D.dates[n-1] + " | 共 " + n + " 个交易日";
 drawTooltip();
-redraw();
+paint(currentType);
 </script>
 </body>
 </html>
