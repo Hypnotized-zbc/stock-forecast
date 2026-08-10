@@ -12,7 +12,7 @@ crawler_stock.py — 股票历史数据查询 + 图表（单文件 Web 应用）
   （浏览器直连东财会被 CORS 拦，本地后端中转绕过）
 - 图表为原生 Canvas 绘制，单页面内完成查询与结果展示，不刷新跳转
 - 数据源：东方财富（主）+ 新浪（备用，东财断连自动切换）
-- 页面右下角"停止服务"可结束本地服务
+- 关闭浏览器页面即自动停止本地服务（页面卸载时 sendBeacon 通知）
 
 运行方式：
     python3 crawler_stock.py
@@ -604,8 +604,6 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
                border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; }
   .query-row button:hover { background: #1d4ed8; }
   .query-row button:disabled { background: #9ca3af; cursor: not-allowed; }
-  .stop-btn { margin-left: auto; font-size: 12px; color: #999; background: none;
-               border: 1px solid #ddd; border-radius: 6px; padding: 5px 10px; cursor: pointer; }
   .tabs { margin-bottom: 10px; }
   .tab { padding: 7px 18px; font-size: 14px; border: 1px solid #d1d5db; background: #fff;
          border-radius: 6px 6px 0 0; cursor: pointer; margin-right: 4px; }
@@ -666,7 +664,6 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     <input type="date" id="endDate">
     <button id="searchBtn">查询</button>
     <span id="status"></span>
-    <button class="stop-btn" id="stopBtn" title="结束本地服务">停止服务</button>
   </div>
   <div id="candidateBox"></div>
 </div>
@@ -1066,20 +1063,20 @@ function renderFuturePanel() {
     return;
   }
   const lastClose = D.closes[D.closes.length-1];
-  // 图例（类似模型拟合：色块 + 名称；现价虚线、最终预测粗黑条）
+  // 图例：色块 + 模型名（同模型拟合板块样式），颜色对应上图预测线
   let html = "<div class='f-pred-title'>图例（颜色对应上图预测线）</div>";
   html += "<div class='f-row'><span class='f-name'><span style='display:inline-block;width:18px;height:0;border-top:3px dashed #111827;vertical-align:middle'></span>真实收盘（现价 "+lastClose.toFixed(2)+"，虚线）</span></div>";
-  const models = [["arima", "ARIMA(1,1,0)", "#dc2626"],
-                  ["ets", "ETS 指数平滑", "#16a34a"],
-                  ["prophet", "Prophet(轻量)", "#f59e0b"],
-                  ["svr", "SVR(核岭)", "#8b5cf6"],
-                  ["rf", "随机森林", "#06b6d4"]];
+  const models = [["arima", "ARIMA 预测", "#dc2626"],
+                  ["ets", "ETS 指数平滑预测", "#16a34a"],
+                  ["prophet", "Prophet 预测", "#f59e0b"],
+                  ["svr", "SVR 预测", "#8b5cf6"],
+                  ["rf", "随机森林预测", "#06b6d4"]];
   for (const [k, title, col] of models) {
     if (D.fit[k] && D.fit[k].predict) {
       html += "<div class='f-row'><span class='f-name'><span class='swatch' style='background:"+col+"'></span>"+title+"</span></div>";
     }
   }
-  html += "<div class='f-row'><span class='f-name'><span style='display:inline-block;width:22px;height:6px;background:#111827;vertical-align:middle'></span>最终预测（RMSE 逆加权平均，粗线）</span></div>";
+  html += "<div class='f-row'><span class='f-name'><span style='display:inline-block;width:22px;height:6px;background:#111827;vertical-align:middle'></span>最终预测（加权平均，粗线）</span></div>";
   // 最终预测（RMSE 逆加权平均）
   const wp = weightedPredict();
   const lastPred = wp[wp.length-1];
@@ -1259,9 +1256,9 @@ document.getElementById("chartType").addEventListener("change", e => {
   currentType = e.target.value;
   paint(currentType);
 });
-document.getElementById("stopBtn").addEventListener("click", () => {
-  fetch("/api/shutdown").catch(()=>{});
-  setStatus("服务已停止，可关闭本页");
+// 关闭/离开页面立即停止本地服务（sendBeacon 在页面卸载时可靠发送）
+window.addEventListener("pagehide", () => {
+  try { navigator.sendBeacon("/api/shutdown"); } catch (e) {}
 });
 
 // 初始化：默认时间范围为近一年
@@ -1358,6 +1355,15 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             self._send_json({"error": f"服务器错误: {exc}"}, 500)
 
+    def do_POST(self):
+        """支持页面卸载时 sendBeacon 发来的停止请求（关闭网页即停止服务）。"""
+        path = urllib.parse.urlparse(self.path).path
+        if path == "/api/shutdown":
+            self._send_json({"ok": True})
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+        else:
+            self._send_json({"error": "404 Not Found"}, 404)
+
 
 def open_browser(url):
     """用 Windows 默认浏览器打开本地地址。"""
@@ -1379,7 +1385,7 @@ def main():
     url = f"http://127.0.0.1:{port}/"
     print(f"[i] 服务已启动: {url}")
     print(f"[i] 浏览器已自动打开，页面上方输入股票名称查询")
-    print(f"[i] 按 Ctrl+C 或页面右下角「停止服务」结束")
+    print(f"[i] 关闭浏览器页面即停止服务（无需手动结束）")
     open_browser(url)
     try:
         server.serve_forever()
