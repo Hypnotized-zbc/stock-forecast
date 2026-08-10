@@ -620,6 +620,8 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   #fitPanel .f-metrics b { font-weight: 600; }
   #fitPanel .f-pred { display: flex; justify-content: space-between; font-size: 12px; color: #555; padding: 1px 0; }
   #fitPanel .f-dir { font-size: 13px; font-weight: 600; padding: 3px 0; }
+  .f-pred-title { font-size: 12px; color: #888; margin: 8px 0 2px; }
+  .f-final { font-size: 14px; font-weight: 700; padding: 4px 0; }
   #fitTip { position: fixed; z-index: 99; background: #fff; border: 1px solid #ddd;
             border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,.15);
             padding: 10px 12px; font-size: 13px; min-width: 210px; display: none;
@@ -986,11 +988,10 @@ function drawFuture() {
   fctx.fillStyle = "#111827"; fctx.font = "bold 13px sans-serif"; fctx.textAlign = "left";
   fctx.fillText("现价 " + lastClose.toFixed(2), padL + 6, yOf(lastClose) - 6);
 
-  // 预测线（粗线 + 大圆点 + 数值标注）
+  // 预测线（模型线：细线 + 小圆点，无数值标注避免拥挤）
   for (const [nm, mo, col] of models) {
     if (!mo || !mo.predict) continue;
-    // 连线
-    fctx.strokeStyle = col; fctx.lineWidth = 3; fctx.beginPath();
+    fctx.strokeStyle = col; fctx.lineWidth = 2; fctx.beginPath();
     let started = false;
     for (let i = 0; i < m; i++) {
       if (mo.predict[i] == null) { started = false; continue; }
@@ -999,38 +1000,60 @@ function drawFuture() {
       started = true;
     }
     fctx.stroke();
-    // 圆点 + 数值 + 末端"10日后"大标签
-    fctx.font = "bold 12px sans-serif";
+    fctx.fillStyle = col;
     for (let i = 0; i < m; i++) {
       if (mo.predict[i] == null) continue;
       const x = xF(i), y = yOf(mo.predict[i]);
-      fctx.fillStyle = col;
-      fctx.beginPath(); fctx.arc(x, y, 4.5, 0, Math.PI * 2); fctx.fill();
-      fctx.strokeStyle = "#fff"; fctx.lineWidth = 1.5;
-      fctx.stroke();
-      fctx.fillStyle = col; fctx.textAlign = "center";
-      fctx.fillText(mo.predict[i].toFixed(2), x, y - 10);
-    }
-    // 末端最终预测值（大标签，醒目）
-    if (mo.predict[m-1] != null) {
-      const x = xF(m-1), y = yOf(mo.predict[m-1]);
-      fctx.font = "bold 15px sans-serif"; fctx.fillStyle = col;
-      fctx.textAlign = "center";
-      fctx.fillText("10日后 " + mo.predict[m-1].toFixed(2), x, y + 24);
+      fctx.beginPath(); fctx.arc(x, y, 3.5, 0, Math.PI * 2); fctx.fill();
     }
   }
 
-  // 图例（画在 canvas 右上角，醒目）
-  fctx.font = "bold 13px sans-serif"; fctx.textAlign = "right";
-  let ly = 26;
-  fctx.fillStyle = "#111827";
-  fctx.fillText("— 现价", W - padR - 6, ly); ly += 18;
-  for (const [nm, mo, col] of models) {
-    if (!mo || !mo.predict) continue;
-    fctx.fillStyle = col;
-    fctx.fillText("— " + nm, W - padR - 6, ly);
-    ly += 18;
+  // 最终预测线（RMSE 逆加权平均，黑色粗线 + 大圆点 + 数值，醒目）
+  const wp = weightedPredict();
+  fctx.strokeStyle = "#111827"; fctx.lineWidth = 2.8; fctx.beginPath();
+  let wstarted = false;
+  for (let i = 0; i < m; i++) {
+    if (wp[i] == null) { wstarted = false; continue; }
+    const x = xF(i), y = yOf(wp[i]);
+    wstarted ? fctx.lineTo(x, y) : fctx.moveTo(x, y);
+    wstarted = true;
   }
+  fctx.stroke();
+  fctx.font = "bold 12px sans-serif";
+  for (let i = 0; i < m; i++) {
+    if (wp[i] == null) continue;
+    const x = xF(i), y = yOf(wp[i]);
+    fctx.fillStyle = "#111827";
+    fctx.beginPath(); fctx.arc(x, y, 5, 0, Math.PI * 2); fctx.fill();
+    fctx.strokeStyle = "#fff"; fctx.lineWidth = 1.5; fctx.stroke();
+    fctx.fillStyle = "#111827"; fctx.textAlign = "center";
+    fctx.fillText(wp[i].toFixed(2), x, y - 12);
+  }
+  if (wp[m-1] != null) {
+    const x = xF(m-1), y = yOf(wp[m-1]);
+    fctx.font = "bold 15px sans-serif"; fctx.fillStyle = "#111827";
+    fctx.textAlign = "center";
+    fctx.fillText("最终 " + wp[m-1].toFixed(2), x, y + 26);
+  }
+}
+
+// 按 RMSE 逆加权：误差小的模型权重大
+function weightedPredict() {
+  const ws = {};
+  let wsum = 0;
+  for (const k of FIT_ORDER) {
+    if (D.fit[k] && D.fit[k].predict && D.fit[k].rmse) {
+      ws[k] = 1 / D.fit[k].rmse;
+      wsum += ws[k];
+    }
+  }
+  const pred = [];
+  for (let i = 0; i < 10; i++) {
+    let s = 0;
+    for (const k in ws) s += ws[k] * D.fit[k].predict[i];
+    pred.push(wsum > 0 ? s / wsum : null);
+  }
+  return pred;
 }
 
 function renderFuturePanel() {
@@ -1041,27 +1064,35 @@ function renderFuturePanel() {
     return;
   }
   const lastClose = D.closes[D.closes.length-1];
+  // 图例（类似模型拟合：色块 + 名称）
+  let html = "<div class='f-pred-title'>图例（颜色对应上图预测线）</div>";
+  html += "<div class='f-row'><span class='f-name'><span class='swatch' style='background:#111827'></span>真实收盘（现价 "+lastClose.toFixed(2)+"）</span></div>";
   const models = [["arima", "ARIMA(1,1,0)", "#dc2626"],
                   ["ets", "ETS 指数平滑", "#16a34a"],
                   ["prophet", "Prophet(轻量)", "#f59e0b"],
                   ["svr", "SVR(核岭)", "#8b5cf6"],
                   ["rf", "随机森林", "#06b6d4"]];
-  let html = "";
   for (const [k, title, col] of models) {
-    const mo = D.fit[k];
-    if (!mo || !mo.predict) continue;
-    const lastPred = mo.predict[mo.predict.length-1];
-    const up = lastPred >= lastClose;
-    const chg = ((lastPred - lastClose) / lastClose * 100).toFixed(2);
-    html += "<div class='f-row'><span class='f-name'><span class='swatch' style='background:"+col+"'></span>"+title+"</span></div>";
-    html += "<div class='f-dir' style='color:"+(up?UP:DOWN)+"'>10日后方向："+(up?"上涨 ↑":"下跌 ↓")+"（"+chg+"%）</div>";
-    for (let i = 0; i < mo.predict.length; i++) {
-      const dt = mo.predict_dates && mo.predict_dates[i] ? mo.predict_dates[i].slice(5) : ("D+"+(i+1));
-      const dv = ((mo.predict[i] - lastClose) / lastClose * 100);
-      const cls = dv >= 0 ? "up" : "down";
-      html += "<div class='f-pred'><span>"+dt+"</span><span>"+fmt(mo.predict[i])+
-              " <span class='"+cls+"'>("+dv.toFixed(2)+"%)</span></span></div>";
+    if (D.fit[k] && D.fit[k].predict) {
+      html += "<div class='f-row'><span class='f-name'><span class='swatch' style='background:"+col+"'></span>"+title+"</span></div>";
     }
+  }
+  // 最终预测（RMSE 逆加权平均）
+  const wp = weightedPredict();
+  const lastPred = wp[wp.length-1];
+  const up = lastPred >= lastClose;
+  const chg = ((lastPred - lastClose) / lastClose * 100).toFixed(2);
+  const p0 = D.fit.arima.predict_dates[0] || "D+1";
+  const p9 = D.fit.arima.predict_dates[D.fit.arima.predict_dates.length-1] || "D+10";
+  html += "<div class='f-pred-title'>最终预测（RMSE 逆加权平均）</div>";
+  html += "<div class='f-final' style='color:"+(up?UP:DOWN)+"'>"+(up?"上涨 ↑":"下跌 ↓")+" ｜ 10日后 "+lastPred.toFixed(2)+"（"+chg+"%）</div>";
+  html += "<div class='f-pred-title'>逐日预测（"+p0.slice(5)+" ~ "+p9.slice(5)+"）</div>";
+  for (let i = 0; i < wp.length; i++) {
+    const dt = D.fit.arima.predict_dates[i] ? D.fit.arima.predict_dates[i].slice(5) : ("D+"+(i+1));
+    const dv = ((wp[i] - lastClose) / lastClose * 100);
+    const cls = dv >= 0 ? "up" : "down";
+    html += "<div class='f-pred'><span>"+dt+"</span><span>"+fmt(wp[i])+
+            " <span class='"+cls+"'>("+dv.toFixed(2)+"%)</span></span></div>";
   }
   body.innerHTML = html;
 }
