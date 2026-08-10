@@ -23,6 +23,7 @@ crawler_stock.py — 股票历史数据查询 + 图表（单文件 Web 应用）
 import csv
 import json
 import math
+import re
 import threading
 import time
 import urllib.parse
@@ -380,6 +381,85 @@ def _rf_light(y, horizon, n_trees=30, max_depth=8, seed=7):
     return fitted, preds
 
 
+def _quote_eastmoney(secid):
+    """东财实时行情 + 基本面（最新价/涨跌幅/量额/PE/PB/市值/股本等）。"""
+    url = "https://push2.eastmoney.com/api/qt/stock/get"
+    params = {
+        "secid": secid, "invt": "2", "fltt": "2",
+        "fields": "f43,f47,f48,f57,f58,f60,f84,f85,f92,f162,f167,f170,f183",
+    }
+    data = get_json(url, params)
+    d = data.get("data") or {}
+    if not d or d.get("f43") is None:
+        return None
+    return {
+        "name": d.get("f58"),
+        "code": d.get("f57"),
+        "price": d.get("f43"),
+        "prev_close": d.get("f60"),
+        "change_pct": d.get("f170"),
+        "volume": d.get("f47"),
+        "amount": d.get("f48"),
+        "pe": d.get("f162"),        # PE(动)
+        "pb": d.get("f167"),        # PB
+        "mktcap": d.get("f183"),    # 总市值(元)
+        "total_shares": d.get("f84"),   # 总股本(股)
+        "float_shares": d.get("f85"),   # 流通股本(股)
+        "bps": d.get("f92"),        # 每股净资产
+    }
+
+
+def _quote_sina(secid):
+    """新浪实时行情备用源（仅价格/量额，无基本面；字段缺失置 None）。"""
+    prefix, code = secid.split(".")
+    sym = ("sh" if prefix == "1" else "sz") + code
+    url = f"https://hq.sinajs.cn/list={sym}"
+    resp = _SESSION.get(url, headers={**HEADERS,
+                                      "Referer": "https://finance.sina.com.cn"}, timeout=10)
+    resp.raise_for_status()
+    resp.encoding = "gbk"
+    m = re.search(r'="([^"]*)"', resp.text)
+    if not m:
+        return None
+    parts = m.group(1).split(",")
+    if len(parts) < 32:
+        return None
+    try:
+        prev = float(parts[2])
+        price = float(parts[3])
+    except (ValueError, IndexError):
+        return None
+    return {
+        "name": parts[0],
+        "code": code,
+        "price": price,
+        "prev_close": prev,
+        "change_pct": (price - prev) / prev * 100 if prev else 0.0,
+        "volume": float(parts[8]) if parts[8] else None,   # 股
+        "amount": float(parts[9]) if parts[9] else None,   # 元
+        "pe": None, "pb": None, "mktcap": None,
+        "total_shares": None, "float_shares": None, "bps": None,
+    }
+
+
+def fetch_quote(secid):
+    """东财实时行情（主）→ 新浪（备）；双源都失败返回 None。"""
+    try:
+        q = _quote_eastmoney(secid)
+        if q:
+            return q
+    except Exception as exc:
+        print(f"[quote] 东财失败: {exc}")
+    try:
+        q = _quote_sina(secid)
+        if q:
+            return q
+        print("[quote] 新浪返回空")
+    except Exception as exc:
+        print(f"[quote] 新浪失败: {exc}")
+    return None
+
+
 def compute_fits(closes, dates=None, horizon=10):
     """对收盘价序列做三种模型拟合（in-sample）+ 未来 horizon 日预测。
 
@@ -632,6 +712,29 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   .cand { display: inline-block; margin: 4px 6px 0 0; padding: 6px 12px; font-size: 13px;
           border: 1px solid #d1d5db; border-radius: 6px; background: #fff; cursor: pointer; }
   .cand:hover { border-color: #2563eb; color: #2563eb; }
+  .wl-add { margin: 4px 10px 0 0; padding: 6px 10px; font-size: 13px; line-height: 1;
+            border: 1px solid #c7d2fe; border-radius: 6px; background: #eef2ff;
+            color: #3730a3; cursor: pointer; }
+  .wl-add:hover { background: #e0e7ff; }
+  .card-bar { max-width: 1180px; margin: 10px auto 0; background: #fff; border-radius: 10px;
+              box-shadow: 0 2px 8px rgba(0,0,0,.06); padding: 12px 16px;
+              display: flex; flex-wrap: wrap; align-items: center; gap: 18px; font-size: 13px; }
+  .qb-price { font-size: 26px; font-weight: 700; }
+  .qb-item { display: flex; flex-direction: column; gap: 2px; }
+  .qb-item .k { color: #999; font-size: 12px; }
+  .qb-item .v { font-weight: 600; }
+  .qb-time { color: #bbb; font-size: 12px; margin-left: auto; }
+  .fund-item { display: flex; flex-direction: column; gap: 2px; min-width: 90px; }
+  .fund-item .k { color: #999; font-size: 12px; }
+  .fund-item .v { font-weight: 600; font-size: 14px; }
+  .wl-bar { max-width: 1180px; margin: 10px auto 0; display: flex; flex-wrap: wrap; gap: 8px; }
+  .wl-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px;
+             background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 16px;
+             font-size: 13px; color: #3730a3; cursor: pointer; }
+  .wl-chip:hover { background: #e0e7ff; }
+  .wl-chip .x { color: #a5b4fc; font-weight: 700; padding: 0 2px; }
+  .wl-chip .x:hover { color: #dc2626; }
+  .wl-empty { color: #bbb; font-size: 13px; padding: 4px 2px; }
   #status { font-size: 13px; color: #888; margin-left: 6px; }
   .row2 { max-width: 1180px; margin: 10px auto 0; display: flex; align-items: center; gap: 16px; }
   select { padding: 7px 12px; font-size: 14px; border: 1px solid #ccc; border-radius: 6px; background: #fff; }
@@ -661,6 +764,8 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   </div>
   <div id="candidateBox"></div>
 </div>
+<div id="quoteBar" class="card-bar" style="display:none"></div>
+<div id="watchlist" class="wl-bar"></div>
 <div class="tabs">
   <button class="tab active" id="tabChart">行情图表</button>
   <button class="tab" id="tabFit">模型拟合</button>
@@ -691,6 +796,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     <div id="futureBody"></div>
   </div>
 </div>
+<div id="fundBar" class="card-bar" style="display:none"></div>
 <div id="chartTip" class="tip-box"></div>
 <div id="fitTip" class="tip-box"></div>
 <div id="futureTip" class="tip-box"></div>
@@ -1335,15 +1441,94 @@ async function doSearch() {
     if (data.error) { setStatus("搜索失败: " + data.error); return; }
     if (!data.length) { setStatus("未找到该股票"); return; }
     box.innerHTML = data.map((c, i) =>
-      "<button class='cand' data-i='" + i + "'>" + c["名称"] + " " + c["代码"] + " " + c["市场"] + "</button>"
+      "<button class='cand' data-i='" + i + "'>" + c["名称"] + " " + c["代码"] + " " + c["市场"] + "</button>" +
+      "<button class='wl-add' data-i='" + i + "' title='加入自选'>＋</button>"
     ).join("");
     window._cands = data;
-    setStatus("找到 " + data.length + " 个候选，点选一个：");
+    setStatus("找到 " + data.length + " 个候选，点选一个（＋加入自选）：");
   } catch (e) {
     setStatus("请求异常: " + e);
   } finally {
     btn.disabled = false;
   }
+}
+
+// ---- 实时行情 / 基本面 / 自选股 ----
+let _curSecid = null;
+let _quoteTimer = null;
+let _watch = [];
+try { _watch = JSON.parse(localStorage.getItem("wl") || "[]"); } catch (e) { _watch = []; }
+
+function fmtVol(v) { if (v==null) return "—"; if (v>=1e8) return (v/1e8).toFixed(2)+"亿手"; if (v>=1e4) return (v/1e4).toFixed(2)+"万手"; return v+"手"; }
+function fmtAmount(v) { if (v==null) return "—"; if (v>=1e8) return (v/1e8).toFixed(2)+"亿"; if (v>=1e4) return (v/1e4).toFixed(2)+"万"; return v; }
+function fmtShares(v) { if (v==null) return "—"; if (v>=1e8) return (v/1e8).toFixed(2)+"亿股"; return v; }
+
+async function refreshQuote() {
+  if (!_curSecid) return;
+  try {
+    const resp = await fetch("/api/quote?secid=" + encodeURIComponent(_curSecid));
+    const q = await resp.json();
+    if (q.error || q.price == null) return;
+    const up = q.change_pct >= 0;
+    const color = up ? UP : DOWN;
+    const t = new Date();
+    const ts = [t.getHours(), t.getMinutes(), t.getSeconds()].map(x => String(x).padStart(2,"0")).join(":");
+    const qb = document.getElementById("quoteBar");
+    qb.innerHTML =
+      "<span class='qb-price' style='color:"+color+"'>"+q.price.toFixed(2)+"</span>" +
+      "<span class='qb-item'><span class='k'>涨跌幅</span><span class='v' style='color:"+color+"'>"+(up?"+":"")+q.change_pct.toFixed(2)+"%</span></span>" +
+      "<span class='qb-item'><span class='k'>昨收</span><span class='v'>"+(q.prev_close!=null?q.prev_close.toFixed(2):"—")+"</span></span>" +
+      "<span class='qb-item'><span class='k'>成交量</span><span class='v'>"+fmtVol(q.volume)+"</span></span>" +
+      "<span class='qb-item'><span class='k'>成交额</span><span class='v'>"+fmtAmount(q.amount)+"</span></span>" +
+      "<span class='qb-time'>更新于 "+ts+"（每30秒自动刷新）</span>";
+    qb.style.display = "";
+    const fb = document.getElementById("fundBar");
+    fb.innerHTML =
+      "<span class='fund-item'><span class='k'>PE(动)</span><span class='v'>"+(q.pe!=null?q.pe.toFixed(2):"—")+"</span></span>" +
+      "<span class='fund-item'><span class='k'>PB</span><span class='v'>"+(q.pb!=null?q.pb.toFixed(2):"—")+"</span></span>" +
+      "<span class='fund-item'><span class='k'>总市值</span><span class='v'>"+fmtAmount(q.mktcap)+"</span></span>" +
+      "<span class='fund-item'><span class='k'>总股本</span><span class='v'>"+fmtShares(q.total_shares)+"</span></span>" +
+      "<span class='fund-item'><span class='k'>流通股本</span><span class='v'>"+fmtShares(q.float_shares)+"</span></span>" +
+      "<span class='fund-item'><span class='k'>每股净资产</span><span class='v'>"+(q.bps!=null?q.bps.toFixed(2):"—")+"</span></span>";
+    fb.style.display = "";
+  } catch (e) {}
+}
+
+function startQuoteTimer() {
+  if (_quoteTimer) clearInterval(_quoteTimer);
+  _quoteTimer = setInterval(refreshQuote, 30000);
+}
+
+function setChartData(data, name, secid) {
+  D = data;
+  n = D.dates.length;
+  _curSecid = secid;
+  document.getElementById("rangeInfo").textContent =
+    (data.name || name) + " | " + D.dates[0] + " ~ " + D.dates[n-1] + " | 共 " + n + " 个交易日";
+  document.getElementById("candidateBox").innerHTML = "";
+  setStatus("完成");
+  paint(currentType);
+  refreshQuote();
+  startQuoteTimer();
+}
+
+function saveWatch() { try { localStorage.setItem("wl", JSON.stringify(_watch)); } catch (e) {} }
+function renderWatchlist() {
+  const bar = document.getElementById("watchlist");
+  if (!_watch.length) { bar.innerHTML = "<span class='wl-empty'>自选股（查询候选旁点 ＋ 添加）</span>"; return; }
+  bar.innerHTML = _watch.map(w =>
+    "<span class='wl-chip' data-secid='"+w.secid+"'><span>"+w.name+" "+w.code+"</span><span class='x' data-rm='"+w.secid+"'>×</span></span>"
+  ).join("");
+}
+function addWatch(secid, name, code) {
+  if (_watch.some(w => w.secid === secid)) { setStatus("已在自选中"); return; }
+  _watch.push({secid: secid, name: name, code: code});
+  saveWatch(); renderWatchlist();
+  setStatus("已加入自选: " + name);
+}
+function removeWatch(secid) {
+  _watch = _watch.filter(w => w.secid !== secid);
+  saveWatch(); renderWatchlist();
 }
 
 async function doKline(idx) {
@@ -1358,13 +1543,27 @@ async function doKline(idx) {
                              "&start=" + s + "&end=" + e, {signal: ctrl.signal});
     const data = await resp.json();
     if (data.error) { setStatus("下载失败: " + data.error); return; }
-    D = data;
-    n = D.dates.length;
-    document.getElementById("rangeInfo").textContent =
-      (data.name || c["名称"]) + " | " + D.dates[0] + " ~ " + D.dates[n-1] + " | 共 " + n + " 个交易日";
-    document.getElementById("candidateBox").innerHTML = "";
-    setStatus("完成");
-    paint(currentType);
+    setChartData(data, c["名称"], c.secid);
+  } catch (err) {
+    setStatus("请求异常或超时: " + err);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 自选股直接打开（跳过搜索）
+async function doKlineSecid(secid, name) {
+  const s = document.getElementById("startDate").value;
+  const e = document.getElementById("endDate").value;
+  setStatus("下载 " + name + " 数据中（约需 10~30 秒）...");
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 90000);
+  try {
+    const resp = await fetch("/api/kline?secid=" + encodeURIComponent(secid) +
+                             "&start=" + s + "&end=" + e, {signal: ctrl.signal});
+    const data = await resp.json();
+    if (data.error) { setStatus("下载失败: " + data.error); return; }
+    setChartData(data, name, secid);
   } catch (err) {
     setStatus("请求异常或超时: " + err);
   } finally {
@@ -1373,8 +1572,23 @@ async function doKline(idx) {
 }
 
 document.getElementById("candidateBox").addEventListener("click", e => {
+  const add = e.target.closest(".wl-add");
+  if (add) {
+    const c = window._cands[Number(add.dataset.i)];
+    if (c) addWatch(c.secid, c["名称"], c["代码"]);
+    return;
+  }
   const b = e.target.closest(".cand");
   if (b) doKline(Number(b.dataset.i));
+});
+document.getElementById("watchlist").addEventListener("click", e => {
+  const rm = e.target.closest(".x");
+  if (rm) { removeWatch(rm.dataset.rm); return; }
+  const chip = e.target.closest(".wl-chip");
+  if (chip) {
+    const w = _watch.find(x => x.secid === chip.dataset.secid);
+    if (w) doKlineSecid(w.secid, w.name);
+  }
 });
 document.getElementById("searchBtn").addEventListener("click", doSearch);
 document.getElementById("stockInput").addEventListener("keydown", e => {
@@ -1398,6 +1612,7 @@ window.addEventListener("pagehide", () => {
   document.getElementById("startDate").value = fmtDate(d);
   drawTooltip();
   paint(currentType);
+  renderWatchlist();
 })();
 </script>
 </body>
@@ -1473,6 +1688,16 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
                 self._send_json(data)
+            elif path == "/api/quote":
+                secid = (params.get("secid") or [""])[0].strip()
+                if not secid:
+                    self._send_json({"error": "缺少 secid 参数"}, 400)
+                    return
+                q = fetch_quote(secid)
+                if not q:
+                    self._send_json({"error": "未获取到实时行情"}, 404)
+                    return
+                self._send_json(q)
             elif path == "/api/shutdown":
                 self._send_json({"ok": True})
                 threading.Thread(target=self.server.shutdown, daemon=True).start()
