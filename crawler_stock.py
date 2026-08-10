@@ -901,7 +901,9 @@ function renderFitPanel() {
   const order = [["arima", "ARIMA 拟合"], ["ets", "ETS 指数平滑"],
                  ["prophet", "Prophet 拟合"], ["svr", "SVR 拟合"],
                  ["rf", "随机森林拟合"]];
-  let html = "";
+  // 图例：颜色对应上图各拟合线
+  let html = "<div class='f-pred-title'>图例（颜色对应上图拟合线）</div>";
+  html += "<div class='f-row'><span class='f-name'><span class='swatch' style='background:#111827'></span>真实收盘</span></div>";
   for (const [k, title] of order) {
     const m = D.fit[k];
     if (!m) continue;
@@ -1064,9 +1066,9 @@ function renderFuturePanel() {
     return;
   }
   const lastClose = D.closes[D.closes.length-1];
-  // 图例（类似模型拟合：色块 + 名称）
+  // 图例（类似模型拟合：色块 + 名称；现价虚线、最终预测粗黑条）
   let html = "<div class='f-pred-title'>图例（颜色对应上图预测线）</div>";
-  html += "<div class='f-row'><span class='f-name'><span class='swatch' style='background:#111827'></span>真实收盘（现价 "+lastClose.toFixed(2)+"）</span></div>";
+  html += "<div class='f-row'><span class='f-name'><span style='display:inline-block;width:18px;height:0;border-top:3px dashed #111827;vertical-align:middle'></span>真实收盘（现价 "+lastClose.toFixed(2)+"，虚线）</span></div>";
   const models = [["arima", "ARIMA(1,1,0)", "#dc2626"],
                   ["ets", "ETS 指数平滑", "#16a34a"],
                   ["prophet", "Prophet(轻量)", "#f59e0b"],
@@ -1077,6 +1079,7 @@ function renderFuturePanel() {
       html += "<div class='f-row'><span class='f-name'><span class='swatch' style='background:"+col+"'></span>"+title+"</span></div>";
     }
   }
+  html += "<div class='f-row'><span class='f-name'><span style='display:inline-block;width:22px;height:6px;background:#111827;vertical-align:middle'></span>最终预测（RMSE 逆加权平均，粗线）</span></div>";
   // 最终预测（RMSE 逆加权平均）
   const wp = weightedPredict();
   const lastPred = wp[wp.length-1];
