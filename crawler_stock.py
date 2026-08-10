@@ -22,6 +22,7 @@ crawler_stock.py — 股票历史数据查询 + 图表（单文件 Web 应用）
 """
 import csv
 import json
+import math
 import threading
 import time
 import urllib.parse
@@ -243,6 +244,85 @@ def build_chart_data(rows):
     }
 
 
+def compute_fits(closes):
+    """对收盘价序列做三种模型拟合（in-sample），返回拟合值与误差指标。
+
+    返回结构：
+        {"linear": {"name", "values": [...], "mae", "rmse", "r2"}, ...}
+    依赖 statsmodels/numpy；未安装或拟合失败时返回 None（前端提示不可用，
+    不影响行情功能）。
+    """
+    try:
+        import numpy as np
+        from statsmodels.tsa.arima.model import ARIMA
+        from statsmodels.tsa.holtwinters import ExponentialSmoothing
+    except ImportError:
+        return None
+
+    y = np.array(closes, dtype=float)
+    n = len(y)
+    t = np.arange(n)
+    if n < 10:
+        return None
+
+    results = {}
+
+    def _clean(vals):
+        """NaN/None → None，其余保留 4 位小数（json.dumps 默认输出 NaN 非法 JSON）。"""
+        return [None if (v is None or (isinstance(v, float) and math.isnan(v)))
+                else round(float(v), 4) for v in vals]
+
+    # 线性回归：y = a*t + b（最小二乘；polyfit 返回 [斜率, 截距]）
+    try:
+        slope, intercept = np.polyfit(t, y, 1)
+        results["linear"] = {"name": "线性回归",
+                             "values": _clean(slope * t + intercept)}
+    except Exception:
+        pass
+
+    # ARIMA(1,1,0)：一阶差分 + 一阶自回归，适合有趋势的价格序列
+    try:
+        model = ARIMA(y, order=(1, 1, 0))
+        fitted = model.fit()
+        vals = fitted.fittedvalues
+        vals[0] = np.nan  # 差分后首项无定义
+        results["arima"] = {"name": "ARIMA(1,1,0)",
+                            "values": _clean(vals)}
+    except Exception:
+        pass
+
+    # ETS：Holt 线性趋势指数平滑
+    try:
+        model = ExponentialSmoothing(y, trend="add", damped_trend=False)
+        fitted = model.fit()
+        results["ets"] = {"name": "ETS 指数平滑",
+                          "values": _clean(fitted.fittedvalues)}
+    except Exception:
+        pass
+
+    if not results:
+        return None
+
+    # 误差指标：MAE / RMSE / R²（跳过 NaN 的前缀段）
+    y_mean = float(y.mean())
+    for key, r in results.items():
+        vals = np.array(r["values"], dtype=float)
+        mask = ~np.isnan(vals)
+        if mask.sum() < 5:
+            continue
+        err = y[mask] - vals[mask]
+        mae = float(np.mean(np.abs(err)))
+        rmse = float(np.sqrt(np.mean(err ** 2)))
+        ss_res = float(np.sum(err ** 2))
+        ss_tot = float(np.sum((y[mask] - y_mean) ** 2))
+        r2 = 1 - ss_res / ss_tot if ss_tot > 1e-12 else 0.0
+        r["mae"] = round(mae, 4)
+        r["rmse"] = round(rmse, 4)
+        r["r2"] = round(r2, 4)
+
+    return results
+
+
 def save_csv(rows):
     """K线数据留档到 data/ 目录（每次查询自动保存一份）。"""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -281,6 +361,18 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   .query-row button:disabled { background: #9ca3af; cursor: not-allowed; }
   .stop-btn { margin-left: auto; font-size: 12px; color: #999; background: none;
                border: 1px solid #ddd; border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  .tabs { margin-bottom: 10px; }
+  .tab { padding: 7px 18px; font-size: 14px; border: 1px solid #d1d5db; background: #fff;
+         border-radius: 6px 6px 0 0; cursor: pointer; margin-right: 4px; }
+  .tab.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+  #fitPanel .f-title { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+  #fitPanel .f-row { display: flex; justify-content: space-between; padding: 5px 0;
+         border-bottom: 1px dashed #e5e7eb; font-size: 13px; }
+  #fitPanel .f-row .f-name { display: flex; align-items: center; gap: 6px; }
+  #fitPanel .swatch { display: inline-block; width: 18px; height: 4px; border-radius: 2px; }
+  #fitPanel .f-metrics { font-size: 13px; color: #666; margin-top: 6px; }
+  #fitPanel .f-metrics div { padding: 2px 0; }
+  #fitPanel .f-metrics b { font-weight: 600; }
   #candidateBox { margin-top: 8px; }
   .cand { display: inline-block; margin: 4px 6px 0 0; padding: 6px 12px; font-size: 13px;
           border: 1px solid #d1d5db; border-radius: 6px; background: #fff; cursor: pointer; }
@@ -321,7 +413,11 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   </div>
   <div id="candidateBox"></div>
 </div>
-<div class="row2">
+<div class="tabs">
+  <button class="tab active" id="tabChart">行情图表</button>
+  <button class="tab" id="tabFit">模型拟合</button>
+</div>
+<div class="row2" id="chartControls">
   <select id="chartType">
     <option value="kline">K线图（蜡烛图）</option>
     <option value="ma5">5日均线图</option>
@@ -337,6 +433,10 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     <div class="legend" id="legend"></div>
   </div>
   <div id="tip">查询后鼠标移到图上查看每日数据</div>
+  <div id="fitPanel" style="display:none">
+    <div class="f-title">模型拟合结果</div>
+    <div id="fitBody"></div>
+  </div>
 </div>
 <script>
 "use strict";
@@ -486,6 +586,83 @@ function drawChange() {
   }
   legend("<span><i style='color:"+UP+"'>■</i> 上涨</span><span><i style='color:"+DOWN+"'>■</i> 下跌</span><span>单位：%</span>");
 }
+
+// ---- 模型拟合图（真实收盘 + ARIMA + 线性回归 + ETS）----
+const FIT_COLORS = {arima: "#dc2626", linear: "#2563eb", ets: "#16a34a"};
+
+function drawFit() {
+  if (!D || !n) { paint(currentType); return; }
+  const series = [["真实收盘", D.closes, "#111827", 2.0]];
+  let all = [...D.closes];
+  if (D.fit) {
+    for (const k of ["arima", "linear", "ets"]) {
+      if (D.fit[k]) {
+        series.push([D.fit[k].name, D.fit[k].values, FIT_COLORS[k], 1.6]);
+        all = all.concat(D.fit[k].values.filter(v=>v!=null));
+      }
+    }
+  }
+  const [mn, mx] = seriesMinMax(all, 0.06);
+  drawAxes(mn, mx, 5);
+  for (const [nm, arr, color, lw] of series) {
+    ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.beginPath();
+    let started = false;
+    for (let i=0; i<n; i++) {
+      if (arr[i]==null) { started = false; continue; }
+      const x = xOf(i), y = yOf(arr[i], mn, mx);
+      started ? ctx.lineTo(x,y) : ctx.moveTo(x,y);
+      started = true;
+    }
+    ctx.stroke();
+  }
+  let lg = "<span><i style='color:#111827'>—</i> 真实收盘</span>";
+  if (D.fit) {
+    for (const k of ["arima", "linear", "ets"]) {
+      if (D.fit[k]) lg += "<span><i style='color:"+FIT_COLORS[k]+"'>—</i> "+D.fit[k].name+"</span>";
+    }
+  }
+  legend(lg);
+}
+
+function renderFitPanel() {
+  const body = document.getElementById("fitBody");
+  if (!D || !n) { body.innerHTML = "<div style='color:#bbb'>请先查询股票</div>"; return; }
+  if (!D.fit || !Object.keys(D.fit).length) {
+    body.innerHTML = "<div style='color:#999'>模型拟合不可用（statsmodels 未安装或拟合失败）</div>";
+    return;
+  }
+  const order = [["arima", "ARIMA 拟合"], ["linear", "线性回归"], ["ets", "ETS 指数平滑"]];
+  let html = "";
+  for (const [k, title] of order) {
+    const m = D.fit[k];
+    if (!m) continue;
+    html +=
+      "<div class='f-row'><span class='f-name'><span class='swatch' style='background:"+FIT_COLORS[k]+"'></span>"+m.name+"</span></div>" +
+      "<div class='f-metrics'>" +
+      "<div>MAE 平均绝对误差：<b>"+m.mae+"</b></div>" +
+      "<div>RMSE 均方根误差：<b>"+m.rmse+"</b></div>" +
+      "<div>R² 拟合度：<b>"+m.r2+"</b></div>" +
+      "</div>";
+  }
+  body.innerHTML = html;
+}
+
+// ---- 视图切换 ----
+let view = "chart";
+function switchView(v) {
+  view = v;
+  document.getElementById("tabChart").className = v==="chart" ? "tab active" : "tab";
+  document.getElementById("tabFit").className = v==="fit" ? "tab active" : "tab";
+  document.getElementById("chartControls").style.display = v==="chart" ? "" : "none";
+  document.getElementById("legend").style.display = v==="chart" ? "" : "none";
+  document.getElementById("tip").style.display = v==="chart" ? "" : "none";
+  const fp = document.getElementById("fitPanel");
+  fp.style.display = v==="fit" ? "" : "none";
+  if (v==="fit") { renderFitPanel(); drawFit(); }
+  else paint(currentType);
+}
+document.getElementById("tabChart").addEventListener("click", () => switchView("chart"));
+document.getElementById("tabFit").addEventListener("click", () => switchView("fit"));
 
 function legend(html) { document.getElementById("legend").innerHTML = html; }
 
@@ -684,6 +861,8 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 data = build_chart_data(rows)
                 data["name"] = name
+                # 三种模型拟合（statsmodels 未装则返回 null，前端提示不可用）
+                data["fit"] = compute_fits([float(r[2]) for r in rows])
                 try:
                     save_csv(rows)  # 留档，失败不影响响应
                 except Exception:
