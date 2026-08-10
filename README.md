@@ -23,7 +23,7 @@ stock-forecast/
 source ~/venv/bin/activate
 pip install -r requirements.txt
 python -m examples.demo          # 通用爬虫框架演示
-python crawler_stock.py          # 股票历史数据下载器（输入名称 → 近一年 CSV → 桌面）
+python crawler_stock.py          # 输入名称 → 近一年数据 → 自包含 HTML 图表页并打开浏览器
 ```
 
 ## 框架用法

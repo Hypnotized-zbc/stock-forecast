@@ -29,3 +29,17 @@
   utf-8-sig 编码，Excel 直接打开不乱码
 - 删除 Edge CDP 内嵌脚本（不再依赖 PowerShell / Edge / spider_framework）
 - 实测：输入"茅台" → 贵州茅台 242 条日K → 桌面 CSV 生成成功
+
+## v0.4.0 (2026-08-10)
+- 不再把 CSV 保存到桌面；CSV 改为 data/ 目录留档
+- 新增 HTML 图表页（自包含单文件，原生 Canvas 绘图，无外部依赖，离线可开）：
+  下拉列表切换，每次显示一张图：
+  1. K线图（叠加 MA5/MA20/BOLL 上下中轨）
+  2. 5日均线图（收盘价 + MA5）
+  3. 布林带 BOLL 图（上/中/下轨 + 区间填充）
+  4. 成交量 VOL 图（红涨绿跌）
+  5. 涨跌幅柱状图（含 0 轴）
+- 指标计算在 Python 侧完成（MA5/MA20/BOLL），JS 只负责绘图
+- 鼠标悬浮显示当日 OHLCV/MA/BOLL 明细
+- 自动用 Windows 默认浏览器打开（explorer.exe + UNC 路径）
+- 实测：茅台 242 条日K → data/chart_*.html 生成并在 Edge 中打开
