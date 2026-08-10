@@ -56,18 +56,25 @@ HEADERS = {
 # ---------------------------------------------------------------------------
 # 网络请求（带重试）
 # ---------------------------------------------------------------------------
-def get_json(url, params, retries=3):
-    """GET JSON，失败重试（东财接口偶发超时，重试即可）。"""
+_SESSION = requests.Session()  # 复用连接，减少被远端断开的概率
+
+
+def get_json(url, params, retries=5):
+    """GET JSON，失败重试。
+
+    WSL 网络间歇抖动（东财接口偶发 RemoteDisconnected），重试 5 次、
+    指数退避，绝大多数情况能自动恢复。
+    """
     last_err = None
     for attempt in range(1, retries + 1):
         try:
-            resp = requests.get(url, params=params, headers=HEADERS, timeout=15)
+            resp = _SESSION.get(url, params=params, headers=HEADERS, timeout=15)
             resp.raise_for_status()
             return resp.json()
         except (requests.RequestException, ValueError) as exc:
             last_err = exc
             print(f"[!] 请求失败(第{attempt}/{retries}次): {exc}")
-            time.sleep(2 * attempt)
+            time.sleep(1.5 ** attempt)  # 指数退避：2s, 3s, 5s, 8s, 12s
     raise ConnectionError(f"接口请求失败: {url} ({last_err})")
 
 
@@ -134,7 +141,20 @@ def choose_candidate(candidates):
 # K线下载与指标计算
 # ---------------------------------------------------------------------------
 def fetch_kline(secid, start, end):
-    """下载 [start, end] 区间日K，返回 (股票名, 行列表)。"""
+    """下载 [start, end] 区间日K，返回 (股票名, 行列表)。
+
+    优先东方财富；东财接口在 WSL 下偶发断连，失败时自动回退新浪备用源
+    （新浪仅支持 A股：secid 以 1./0. 开头；美股/港股保持东财重试）。
+    """
+    try:
+        return _fetch_kline_em(secid, start, end)
+    except ConnectionError as exc:
+        print(f"[i] 东财K线接口失败，尝试新浪备用源: {exc}")
+        return _fetch_kline_sina(secid, start, end)
+
+
+def _fetch_kline_em(secid, start, end):
+    """东方财富 K线。"""
     params = {
         "secid": secid,
         "klt": "101",          # 101=日K
@@ -150,6 +170,68 @@ def fetch_kline(secid, start, end):
     name = data.get("name", "")
     rows = [line.split(",") for line in data["klines"]]
     return name, rows
+
+
+def _fetch_kline_sina(secid, start, end):
+    """新浪备用 K线（A股）。返回与东财相同结构的 11 字段行。
+
+    新浪字段少：成交额/换手率无数据置空；涨跌额/涨跌幅/振幅按收盘价推算。
+    成交量单位：新浪返回股数，统一换算为手（÷100）与东财一致。
+    """
+    if not secid.startswith(("1.", "0.")):
+        raise ConnectionError("新浪备用源仅支持A股，请稍后重试东财接口")
+
+    market = "sh" if secid.startswith("1.") else "sz"
+    code = secid.split(".")[1]
+    symbol = f"{market}{code}"
+    # datalen=300：近一年约 242 个交易日，留足余量
+    url = ("https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+           "CN_MarketData.getKLineData")
+    params = {"symbol": symbol, "scale": "240", "ma": "no", "datalen": "300"}
+    data = get_json(url, params)
+    if not data:
+        return None, []
+
+    rows = []
+    prev_close = None
+    for item in data:
+        day = item["day"]
+        if not (start.strftime("%Y-%m-%d") <= day <= end.strftime("%Y-%m-%d")):
+            prev_close = float(item["close"])
+            continue  # 先扫描到区间起点，保留前收
+        op, hi, lo, cl = (float(item["open"]), float(item["high"]),
+                          float(item["low"]), float(item["close"]))
+        vol_hand = int(float(item["volume"]) / 100)          # 股 -> 手
+        change = "" if prev_close is None else round(cl - prev_close, 2)
+        change_pct = "" if prev_close is None else round((cl / prev_close - 1) * 100, 2)
+        amplitude = "" if prev_close is None else round((hi - lo) / prev_close * 100, 2)
+        rows.append([day,
+                     f"{op:.2f}", f"{cl:.2f}", f"{hi:.2f}", f"{lo:.2f}",
+                     str(vol_hand), "",                          # 成交额缺失
+                     str(amplitude), str(change_pct), str(change), ""])
+        prev_close = cl
+
+    name = _sina_stock_name(symbol)
+    return name, rows
+
+
+def _sina_stock_name(symbol):
+    """从新浪股票接口取名称（尽力而为，失败返回代码）。"""
+    try:
+        url = ("https://hq.sinajs.cn/list=" + symbol)
+        resp = _SESSION.get(url, headers={
+            "User-Agent": HEADERS["User-Agent"],
+            "Referer": "https://finance.sina.com.cn/",
+        }, timeout=10)
+        text = resp.text
+        # 格式: var hq_str_sh600519="贵州茅台,开盘,昨收,..."
+        if "=\"" in text:
+            name = text.split("=\"")[1].split(",")[0]
+            if name:
+                return name
+    except Exception:
+        pass
+    return symbol
 
 
 def ma(values, n):
