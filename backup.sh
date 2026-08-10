@@ -12,6 +12,7 @@ FILES=(
   crawler/core.py
   crawler/parsers.py
   crawler/__init__.py
+  crawler_stock.py
   examples/demo.py
   tools/upload_github.py
   requirements.txt
