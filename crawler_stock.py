@@ -620,14 +620,14 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   .f-dir { font-size: 13px; font-weight: 600; padding: 3px 0; }
   .f-pred-title { font-size: 12px; color: #888; margin: 8px 0 2px; }
   .f-final { font-size: 14px; font-weight: 700; padding: 4px 0; }
-  #fitTip { position: fixed; z-index: 99; background: #fff; border: 1px solid #ddd;
-            border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,.15);
-            padding: 10px 12px; font-size: 13px; min-width: 210px; display: none;
-            font-family: "Microsoft YaHei", sans-serif; }
-  #fitTip .ft-date { font-size: 14px; font-weight: 600; margin-bottom: 6px; color: #222; }
-  #fitTip .ft-row { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; }
-  #fitTip .lbl { color: #888; }
-  #fitTip .val { font-weight: 600; }
+  .tip-box { position: fixed; z-index: 99; background: #fff; border: 1px solid #ddd;
+             border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,.15);
+             padding: 10px 12px; font-size: 13px; min-width: 220px; display: none;
+             font-family: "Microsoft YaHei", sans-serif; }
+  .tip-box .ft-date { font-size: 14px; font-weight: 600; margin-bottom: 6px; color: #222; }
+  .tip-box .ft-row { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; }
+  .tip-box .lbl { color: #888; }
+  .tip-box .val { font-weight: 600; }
   #candidateBox { margin-top: 8px; }
   .cand { display: inline-block; margin: 4px 6px 0 0; padding: 6px 12px; font-size: 13px;
           border: 1px solid #d1d5db; border-radius: 6px; background: #fff; cursor: pointer; }
@@ -698,7 +698,8 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     <div id="futureBody"></div>
   </div>
 </div>
-<div id="fitTip"></div>
+<div id="fitTip" class="tip-box"></div>
+<div id="futureTip" class="tip-box"></div>
 <script>
 "use strict";
 const UP = "#e03434", DOWN = "#089981";
@@ -1027,6 +1028,50 @@ function drawFuture() {
     fctx.fillText(wp[i].toFixed(2), x, y - 12);
   }
 }
+
+// 未来预测图悬停：十字线 + 浮窗显示各预测线当日值
+function drawFutureTooltip() {
+  fcv.onmousemove = e => {
+    const tip = document.getElementById("futureTip");
+    if (!D || !D.fit || !D.fit.arima || !D.fit.arima.predict) return;
+    const rect = fcv.getBoundingClientRect();
+    const px = (e.clientX - rect.left) * W / rect.width;
+    const padL = 70, padR = 24, padT = 60, padB = 46;
+    const plotW = W - padL - padR;
+    const m = 10;
+    const xF = j => padL + j * plotW / Math.max(1, m - 1);
+    const i = Math.round((px - padL) / (plotW / Math.max(1, m - 1)));
+    if (i < 0 || i >= m) { tip.style.display = "none"; return; }
+    drawFuture();
+    // 十字线（垂直虚线 + 该日点高亮圈）
+    fctx.strokeStyle = "rgba(0,0,0,0.35)"; fctx.setLineDash([4,4]); fctx.lineWidth = 1;
+    fctx.beginPath(); fctx.moveTo(xF(i), padT); fctx.lineTo(xF(i), H - padB); fctx.stroke();
+    fctx.setLineDash([]);
+    // 浮窗：真实收盘 + 5 模型预测 + 最终加权
+    const lastClose = D.closes[D.closes.length-1];
+    const dt = D.fit.arima.predict_dates[i] || ("D+"+(i+1));
+    const wp = weightedPredict();
+    const models = [["ARIMA", D.fit.arima.predict[i], "#dc2626"],
+                    ["ETS", D.fit.ets ? D.fit.ets.predict[i] : null, "#16a34a"],
+                    ["Prophet", D.fit.prophet ? D.fit.prophet.predict[i] : null, "#f59e0b"],
+                    ["SVR", D.fit.svr ? D.fit.svr.predict[i] : null, "#8b5cf6"],
+                    ["随机森林", D.fit.rf ? D.fit.rf.predict[i] : null, "#06b6d4"]];
+    let html = "<div class='ft-date'>"+dt+"</div>";
+    html += "<div class='ft-row'><span class='lbl'>真实收盘(现价)</span><span class='val'>"+lastClose.toFixed(2)+"</span></div>";
+    for (const [nm, v, col] of models) {
+      html += "<div class='ft-row'><span class='lbl'><i style='color:"+col+";font-style:normal'>■</i> "+nm+"</span><span class='val'>"+(v!=null?v.toFixed(2):"—")+"</span></div>";
+    }
+    html += "<div class='ft-row'><span class='lbl'><i style='color:#111827;font-style:normal'>■</i> 最终(加权)</span><span class='val'>"+(wp[i]!=null?wp[i].toFixed(2):"—")+"</span></div>";
+    tip.innerHTML = html;
+    tip.style.display = "block";
+    let tx = e.clientX + 14, ty = e.clientY - 10;
+    if (tx + 240 > window.innerWidth) tx = e.clientX - 250;
+    if (ty + 180 > window.innerHeight) ty = window.innerHeight - 190;
+    tip.style.left = tx + "px"; tip.style.top = ty + "px";
+  };
+  fcv.onmouseleave = () => { document.getElementById("futureTip").style.display = "none"; };
+}
+drawFutureTooltip();
 
 // 按 RMSE 逆加权：误差小的模型权重大
 function weightedPredict() {
