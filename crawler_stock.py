@@ -452,7 +452,6 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   #fitPanel .f-metrics { font-size: 13px; color: #666; margin-top: 6px; }
   #fitPanel .f-metrics div { padding: 2px 0; }
   #fitPanel .f-metrics b { font-weight: 600; }
-  #fitPanel .f-pred-title { font-size: 12px; color: #888; margin: 6px 0 2px; }
   #fitPanel .f-pred { display: flex; justify-content: space-between; font-size: 12px; color: #555; padding: 1px 0; }
   #fitPanel .f-dir { font-size: 13px; font-weight: 600; padding: 3px 0; }
   #fitTip { position: fixed; z-index: 99; background: #fff; border: 1px solid #ddd;
@@ -804,20 +803,7 @@ function renderFitPanel() {
       "<div>RMSE 均方根误差：<b>"+m.rmse+"</b></div>" +
       "<div>R² 拟合度：<b>"+m.r2+"</b></div>" +
       "</div>";
-    // 未来 5 日预测
-    if (m.predict && m.predict.length) {
-      const lastClose = D.closes[D.closes.length-1];
-      const lastPred = m.predict[m.predict.length-1];
-      const up = lastPred >= lastClose;
-      const p0 = m.predict_dates && m.predict_dates[0] ? m.predict_dates[0] : "D+1";
-      const p4 = m.predict_dates && m.predict_dates[4] ? m.predict_dates[4] : "D+5";
-      html += "<div class='f-pred-title'>未来5日预测（"+p0+" ~ "+p4+"）</div>";
-      html += "<div class='f-dir' style='color:"+(up?UP:DOWN)+"'>5日后方向："+(up?"上涨 ↑":"下跌 ↓")+"</div>";
-      for (let j=0; j<m.predict.length; j++) {
-        const dt = m.predict_dates && m.predict_dates[j] ? m.predict_dates[j].slice(5) : ("D+"+(j+1));
-        html += "<div class='f-pred'><span>"+dt+"</span><span>"+fmt(m.predict[j])+"</span></div>";
-      }
-    }
+    // 未来预测已移至独立「未来预测」视图，这里不再重复展示
   }
   body.innerHTML = html;
 }
