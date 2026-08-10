@@ -170,3 +170,5 @@
   601088 R² 与 numpy 版一致 ARIMA 0.9524 / ETS 0.9491）
 - 排查中发现残留旧服务进程（系统 python 无 numpy）占旧端口导致假象，
   已清理；页面 CDP 验证无"不可用"提示、2 模型、10 行预测、方向标注齐全
+- 补充健壮性：compute_fits 过滤 None/非法收盘值并同步日期（此前含 None
+  会 float() 崩溃；验证 None 被剔除、全 None 返回 None、短序列返回 None）

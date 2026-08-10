@@ -256,7 +256,18 @@ def compute_fits(closes, dates=None):
     - ETS：Holt 线性趋势指数平滑（α/β 网格搜索最小化 SSE）
     数据不足或异常时返回 None（前端提示不可用，不影响行情功能）。
     """
-    y = [float(v) for v in closes]
+    # 过滤 None/非法值，并同步日期
+    raw = list(zip(closes, dates)) if dates and len(dates) == len(closes) \
+        else [(v, None) for v in closes]
+    pairs = []
+    for v, d in raw:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            continue
+        pairs.append((f, d))
+    y = [p[0] for p in pairs]
+    dates = [p[1] for p in pairs]
     n = len(y)
     if n < 10:
         return None
