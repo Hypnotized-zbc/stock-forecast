@@ -244,11 +244,12 @@ def build_chart_data(rows):
     }
 
 
-def compute_fits(closes):
-    """对收盘价序列做三种模型拟合（in-sample），返回拟合值与误差指标。
+def compute_fits(closes, dates=None):
+    """对收盘价序列做三种模型拟合（in-sample）+ 未来5日预测。
 
     返回结构：
         {"linear": {"name", "values": [...], "mae", "rmse", "r2"}, ...}
+        每个模型含 "predict": [5个预测值], "predict_dates": [5个日期]
     纯 numpy 实现，不依赖 statsmodels（该库体积大且环境易缺失）：
     - 线性回归：最小二乘直线
     - ARIMA(1,1,0)：一阶差分 + AR(1) 系数最小二乘估计（数学上等价）
@@ -265,6 +266,17 @@ def compute_fits(closes):
     t = np.arange(n)
     if n < 10:
         return None
+
+    # 未来 5 个预测日期（按最后交易日顺延自然日）
+    try:
+        if dates and len(dates) == n:
+            last_dt = datetime.strptime(dates[-1], "%Y-%m-%d")
+            pred_dates = [(last_dt + timedelta(days=i + 1)).strftime("%Y-%m-%d")
+                          for i in range(5)]
+        else:
+            pred_dates = [f"D+{i + 1}" for i in range(5)]
+    except Exception:
+        pred_dates = [f"D+{i + 1}" for i in range(5)]
 
     results = {}
 
@@ -291,8 +303,17 @@ def compute_fits(closes):
         fitted = np.full(n, np.nan)
         for i in range(2, n):
             fitted[i] = y[i - 1] + phi * (y[i - 1] - y[i - 2])
+        # 未来 5 日预测：差分 AR(1) 递推外推
+        last, prev = y[-1], y[-2]
+        preds = []
+        for _ in range(5):
+            nxt = last + phi * (last - prev)
+            preds.append(nxt)
+            prev, last = last, nxt
         results["arima"] = {"name": "ARIMA(1,1,0)",
-                            "values": _clean(fitted)}
+                            "values": _clean(fitted),
+                            "predict": _clean(preds),
+                            "predict_dates": pred_dates}
     except Exception:
         pass
 
@@ -318,8 +339,17 @@ def compute_fits(closes):
                 sse = float(np.sum(err ** 2))
                 if sse < best_sse:
                     best_a, best_b, best_sse, best_fit = alpha, beta, sse, f
+        # 未来 5 日预测：用最优 α/β 递推至末尾状态，水平+趋势外推
+        level, trend = y[0], y[1] - y[0] if n > 1 else 0.0
+        for i in range(1, n):
+            new_level = best_a * y[i] + (1 - best_a) * (level + trend)
+            new_trend = best_b * (new_level - level) + (1 - best_b) * trend
+            level, trend = new_level, new_trend
+        preds = [level + (k + 1) * trend for k in range(5)]
         results["ets"] = {"name": f"ETS 指数平滑(α={best_a:.2f})",
-                          "values": _clean(best_fit)}
+                          "values": _clean(best_fit),
+                          "predict": _clean(preds),
+                          "predict_dates": pred_dates}
     except Exception:
         pass
 
@@ -396,6 +426,9 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   #fitPanel .f-metrics { font-size: 13px; color: #666; margin-top: 6px; }
   #fitPanel .f-metrics div { padding: 2px 0; }
   #fitPanel .f-metrics b { font-weight: 600; }
+  #fitPanel .f-pred-title { font-size: 12px; color: #888; margin: 6px 0 2px; }
+  #fitPanel .f-pred { display: flex; justify-content: space-between; font-size: 12px; color: #555; padding: 1px 0; }
+  #fitPanel .f-dir { font-size: 13px; font-weight: 600; padding: 3px 0; }
   #candidateBox { margin-top: 8px; }
   .cand { display: inline-block; margin: 4px 6px 0 0; padding: 6px 12px; font-size: 13px;
           border: 1px solid #d1d5db; border-radius: 6px; background: #fff; cursor: pointer; }
@@ -610,39 +643,102 @@ function drawChange() {
   legend("<span><i style='color:"+UP+"'>■</i> 上涨</span><span><i style='color:"+DOWN+"'>■</i> 下跌</span><span>单位：%</span>");
 }
 
-// ---- 模型拟合图（真实收盘 + ARIMA + ETS）----
+// ---- 模型拟合图（真实收盘 + ARIMA + ETS + 未来5日预测）----
 const FIT_COLORS = {arima: "#dc2626", ets: "#16a34a"};
+
+function drawAxesFit(mn, mx, ticks, xF, m) {
+  ctx.strokeStyle = "#f0f0f0"; ctx.fillStyle = "#888"; ctx.font = "12px sans-serif"; ctx.lineWidth = 1;
+  for (let t=0; t<=ticks; t++) {
+    const v = mn + (mx-mn)*t/ticks;
+    const y = yOf(v, mn, mx);
+    ctx.beginPath(); ctx.moveTo(PAD.L, y); ctx.lineTo(W-PAD.R, y); ctx.stroke();
+    ctx.textAlign = "right"; ctx.fillText(fmt(v), PAD.L-8, y+4);
+  }
+  ctx.textAlign = "center";
+  const step = Math.ceil(n/8);
+  for (let i=0; i<n; i+=step) {
+    ctx.fillText(D.dates[i], xF(i), H-PAD.B+18);
+  }
+  // 未来 5 个日期标签（MM-DD，避免拥挤）
+  if (m > n && D.fit && D.fit.arima && D.fit.arima.predict_dates) {
+    for (let j=0; j<5; j++) {
+      const dt = D.fit.arima.predict_dates[j] ? D.fit.arima.predict_dates[j].slice(5) : ("+"+(j+1));
+      ctx.fillText(dt, xF(n+j), H-PAD.B+18);
+    }
+  }
+}
 
 function drawFit() {
   ctx.clearRect(0, 0, W, H);  // 先清空画布，避免残留上一张图（如 K 线）
   if (!D || !n) { paint(currentType); return; }
+  // 未来 5 个点（若任一模型有预测）
+  const future = (D.fit && D.fit.arima && D.fit.arima.predict) ? 5 : 0;
+  const m = n + future;
+  const xF = i => PAD.L + i * (W-PAD.L-PAD.R) / Math.max(1, m-1);
+
   const series = [["真实收盘", D.closes, "#111827", 2.0]];
+  const dashSeries = [];
   let all = [...D.closes];
   if (D.fit) {
     for (const k of ["arima", "ets"]) {
       if (D.fit[k]) {
         series.push([D.fit[k].name, D.fit[k].values, FIT_COLORS[k], 1.6]);
         all = all.concat(D.fit[k].values.filter(v=>v!=null));
+        if (D.fit[k].predict) {
+          dashSeries.push([D.fit[k].name+"预测", D.fit[k].predict, FIT_COLORS[k]]);
+          all = all.concat(D.fit[k].predict);
+        }
       }
     }
   }
   const [mn, mx] = seriesMinMax(all, 0.06);
-  drawAxes(mn, mx, 5);
+  drawAxesFit(mn, mx, 5, xF, m);
+
+  // 未来区背景 + 分隔线 + 标注
+  if (future) {
+    const x0 = xF(n - 0.5);
+    ctx.fillStyle = "rgba(0,0,0,0.035)";
+    ctx.fillRect(x0, PAD.T, W - PAD.R - x0, H - PAD.T - PAD.B);
+    ctx.strokeStyle = "#b0b0b0"; ctx.setLineDash([4,4]); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x0, PAD.T); ctx.lineTo(x0, H-PAD.B); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#999"; ctx.font = "12px sans-serif"; ctx.textAlign = "left";
+    ctx.fillText("未来5日预测", x0 + 8, PAD.T + 14);
+  }
+
+  // 历史拟合线（实线）
   for (const [nm, arr, color, lw] of series) {
     ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.beginPath();
     let started = false;
     for (let i=0; i<n; i++) {
       if (arr[i]==null) { started = false; continue; }
-      const x = xOf(i), y = yOf(arr[i], mn, mx);
+      const x = xF(i), y = yOf(arr[i], mn, mx);
       started ? ctx.lineTo(x,y) : ctx.moveTo(x,y);
       started = true;
     }
     ctx.stroke();
   }
+  // 未来预测（虚线，从最后拟合点连出）
+  for (const [nm, arr, color] of dashSeries) {
+    ctx.strokeStyle = color; ctx.lineWidth = 1.6; ctx.setLineDash([6,4]);
+    ctx.beginPath();
+    let started = false;
+    for (let j=0; j<arr.length; j++) {
+      const x = xF(n+j), y = yOf(arr[j], mn, mx);
+      started ? ctx.lineTo(x,y) : ctx.moveTo(x,y);
+      started = true;
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
   let lg = "<span><i style='color:#111827'>—</i> 真实收盘</span>";
   if (D.fit) {
     for (const k of ["arima", "ets"]) {
-      if (D.fit[k]) lg += "<span><i style='color:"+FIT_COLORS[k]+"'>—</i> "+D.fit[k].name+"</span>";
+      if (D.fit[k]) {
+        lg += "<span><i style='color:"+FIT_COLORS[k]+"'>—</i> "+D.fit[k].name+"</span>" +
+              "<span><i style='color:"+FIT_COLORS[k]+"'>┅</i> "+D.fit[k].name+"预测</span>";
+      }
     }
   }
   legend(lg);
@@ -667,6 +763,20 @@ function renderFitPanel() {
       "<div>RMSE 均方根误差：<b>"+m.rmse+"</b></div>" +
       "<div>R² 拟合度：<b>"+m.r2+"</b></div>" +
       "</div>";
+    // 未来 5 日预测
+    if (m.predict && m.predict.length) {
+      const lastClose = D.closes[D.closes.length-1];
+      const lastPred = m.predict[m.predict.length-1];
+      const up = lastPred >= lastClose;
+      const p0 = m.predict_dates && m.predict_dates[0] ? m.predict_dates[0] : "D+1";
+      const p4 = m.predict_dates && m.predict_dates[4] ? m.predict_dates[4] : "D+5";
+      html += "<div class='f-pred-title'>未来5日预测（"+p0+" ~ "+p4+"）</div>";
+      html += "<div class='f-dir' style='color:"+(up?UP:DOWN)+"'>5日后方向："+(up?"上涨 ↑":"下跌 ↓")+"</div>";
+      for (let j=0; j<m.predict.length; j++) {
+        const dt = m.predict_dates && m.predict_dates[j] ? m.predict_dates[j].slice(5) : ("D+"+(j+1));
+        html += "<div class='f-pred'><span>"+dt+"</span><span>"+fmt(m.predict[j])+"</span></div>";
+      }
+    }
   }
   body.innerHTML = html;
 }
@@ -887,8 +997,9 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 data = build_chart_data(rows)
                 data["name"] = name
-                # 三种模型拟合（statsmodels 未装则返回 null，前端提示不可用）
-                data["fit"] = compute_fits([float(r[2]) for r in rows])
+                # 三种模型拟合 + 未来5日预测（纯 numpy，无外部依赖）
+                data["fit"] = compute_fits([float(r[2]) for r in rows],
+                                           [r[0] for r in rows])
                 try:
                     save_csv(rows)  # 留档，失败不影响响应
                 except Exception:
