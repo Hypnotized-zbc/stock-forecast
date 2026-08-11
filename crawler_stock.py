@@ -893,11 +893,14 @@ let currentType = "kline";
 const fmt = (v, d=2) => (v==null || isNaN(v)) ? "-" : Number(v).toFixed(d);
 
 function priceMinMax() {
-  const lo = Math.min(...D.lows), hi = Math.max(...D.highs);
+  // 纵轴范围随可见范围重算：放大横轴后价格轴按当前可见数据缩放，数据符合新坐标
+  const [a0, a1] = zRange();
+  const lo = Math.min(...D.lows.slice(a0, a1 + 1)), hi = Math.max(...D.highs.slice(a0, a1 + 1));
   const pad = (hi-lo)*0.06 || 1; return [lo-pad, hi+pad];
 }
 function seriesMinMax(arr, padRatio) {
-  const vals = arr.filter(v=>v!=null);
+  const [a0, a1] = zRange();
+  const vals = arr.slice(a0, a1 + 1).filter(v=>v!=null);
   if (!vals.length) return [0,1];
   let lo = Math.min(...vals), hi = Math.max(...vals);
   const pad = (hi-lo)*(padRatio||0.08) || 1; return [lo-pad, hi+pad];
@@ -941,7 +944,8 @@ function drawAxes(mn, mx, ticks) {
 function drawKline() {
   const [mn, mx] = priceMinMax();
   drawAxes(mn, mx, 5);
-  const bw = Math.max(1.5, (W-PAD.L-PAD.R)/n*0.68);
+  const [b0, b1] = zRange();
+  const bw = Math.max(1.5, (W-PAD.L-PAD.R)/(b1-b0+1)*0.68);
   for (let i=0; i<n; i++) {
     const up = D.closes[i] >= D.opens[i];
     ctx.strokeStyle = ctx.fillStyle = up ? UP : DOWN;
@@ -1011,7 +1015,8 @@ function drawBOLL() {
 function drawVol() {
   const [mn, mx] = seriesMinMax(D.vols, 0.05);
   drawAxes(mn, mx, 4);
-  const bw = Math.max(1.2, (W-PAD.L-PAD.R)/n*0.6);
+  const [b0, b1] = zRange();
+  const bw = Math.max(1.2, (W-PAD.L-PAD.R)/(b1-b0+1)*0.6);
   for (let i=0; i<n; i++) {
     const up = D.closes[i] >= D.opens[i];
     ctx.fillStyle = up ? UP : DOWN;
@@ -1029,7 +1034,8 @@ function drawChange() {
   const y0 = yOf(0, lo, hi);
   ctx.strokeStyle = "#999"; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(PAD.L, y0); ctx.lineTo(W-PAD.R, y0); ctx.stroke();
-  const bw = Math.max(1.2, (W-PAD.L-PAD.R)/n*0.6);
+  const [b0, b1] = zRange();
+  const bw = Math.max(1.2, (W-PAD.L-PAD.R)/(b1-b0+1)*0.6);
   for (let i=0; i<n; i++) {
     ctx.fillStyle = D.changes[i] >= 0 ? UP : DOWN;
     const y = yOf(D.changes[i], lo, hi);
@@ -1143,11 +1149,13 @@ function drawFuture() {
   fctx.font = "13px sans-serif"; fctx.fillStyle = "#888";
   fctx.fillText("今日 " + todayStr + " ｜ 预测区间 " + p0 + " ~ " + p9, W / 2, 44);
 
-  // y 范围：现价 + 所有预测
+  // y 范围：现价 + 可见范围内预测（放大横轴后纵轴随可见预测重算）
   let lo = lastClose, hi = lastClose;
+  const [z0, z1] = ZOOM ? [ZOOM.i0, ZOOM.i1] : [0, m - 1];
   for (const [nm, mo, col] of models) {
     if (!mo || !mo.predict) continue;
-    for (const v of mo.predict) {
+    for (let j = z0; j <= z1; j++) {
+      const v = mo.predict[j];
       if (v == null) continue;
       lo = Math.min(lo, v); hi = Math.max(hi, v);
     }
