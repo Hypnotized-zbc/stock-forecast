@@ -805,6 +805,15 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   .legend span { margin-right: 14px; }
   .up { color: #e03434; } .down { color: #089981; }
   .empty { color: #bbb; text-align: center; padding: 60px 0; font-size: 14px; }
+  #zoomOverlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.62);
+                 z-index: 1000; align-items: center; justify-content: center; }
+  #zoomClose { position: fixed; top: 14px; right: 18px; width: 46px; height: 46px;
+               font-size: 24px; line-height: 1; border: none; border-radius: 50%;
+               background: rgba(255,255,255,.92); color: #333; cursor: pointer; z-index: 1001; }
+  #zoomClose:hover { background: #fff; color: #dc2626; }
+  #zoomCanvas { max-width: calc(100vw - 60px); max-height: calc(100vh - 60px);
+                background: #fff; border-radius: 10px;
+                box-shadow: 0 10px 40px rgba(0,0,0,.5); }
 </style>
 </head>
 <body>
@@ -859,13 +868,17 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
 <div id="fitTip" class="tip-box"></div>
 <div id="futureTip" class="tip-box"></div>
 <div id="pinTip" class="tip-box"></div>
+<div id="zoomOverlay">
+  <button id="zoomClose" title="关闭放大">✕</button>
+  <canvas id="zoomCanvas"></canvas>
+</div>
 <script>
 "use strict";
 const UP = "#e03434", DOWN = "#089981";
 const W = 1140, H = 620, PAD = {L:64, R:20, T:24, B:42};
 
 const cv = document.getElementById("chart");
-const ctx = cv.getContext("2d");
+let ctx = cv.getContext("2d");
 const dpr = window.devicePixelRatio || 1;
 cv.width = W * dpr; cv.height = H * dpr;
 cv.style.width = W + "px"; cv.style.height = H + "px";
@@ -888,7 +901,23 @@ function seriesMinMax(arr, padRatio) {
   let lo = Math.min(...vals), hi = Math.max(...vals);
   const pad = (hi-lo)*(padRatio||0.08) || 1; return [lo-pad, hi+pad];
 }
-function xOf(i) { return PAD.L + i * (W-PAD.L-PAD.R) / Math.max(1,n-1); }
+// ---- 全屏放大状态（双击图表进入；滚轮缩放横轴、左键拖拽平移）----
+let ZOOM = null;       // null=普通模式；{i0, i1}=放大模式可见天数索引范围
+let _zoomDrag = null;  // 拖拽平移状态 {startX, i0, i1, moved}
+
+// 可见天数索引范围（普通模式返回全年）
+function zRange() {
+  if (!ZOOM) return [0, Math.max(0, n - 1)];
+  return [Math.max(0, ZOOM.i0 | 0), Math.min(Math.max(0, n - 1), ZOOM.i1 | 0)];
+}
+// 放大模式下可显示的最大索引（future 视图固定 10 天）
+function zoomTotalIdx() { return view === "future" ? 9 : Math.max(0, n - 1); }
+
+function xOf(i) {
+  if (!ZOOM) return PAD.L + i * (W-PAD.L-PAD.R) / Math.max(1, n - 1);
+  const span = Math.max(1, ZOOM.i1 - ZOOM.i0);
+  return PAD.L + (i - ZOOM.i0) * (W-PAD.L-PAD.R) / span;
+}
 function yOf(v, mn, mx) { return PAD.T + (mx-v) * (H-PAD.T-PAD.B) / (mx-mn); }
 
 function drawAxes(mn, mx, ticks) {
@@ -900,8 +929,9 @@ function drawAxes(mn, mx, ticks) {
     ctx.textAlign = "right"; ctx.fillText(fmt(v), PAD.L-8, y+4);
   }
   ctx.textAlign = "center";
-  const step = Math.ceil(n/8);
-  for (let i=0; i<n; i+=step) {
+  const [a0, a1] = zRange();
+  const step = Math.max(1, Math.ceil((a1 - a0) / 8));
+  for (let i = a0; i <= a1; i += step) {
     ctx.fillText(D.dates[i], xOf(i), H-PAD.B+18);
   }
 }
@@ -1079,7 +1109,7 @@ function renderFitPanel() {
 
 // ---- 未来预测画布（独立，画得醒目）----
 const fcv = document.getElementById("futureChart");
-const fctx = fcv.getContext("2d");
+let fctx = fcv.getContext("2d");
 fcv.width = W * dpr; fcv.height = H * dpr;
 fcv.style.width = W + "px"; fcv.style.height = H + "px";
 fctx.scale(dpr, dpr);
@@ -1097,7 +1127,11 @@ function drawFuture() {
   const dates = D.fit.arima.predict_dates || [];
   const padL = 70, padR = 24, padT = 60, padB = 46;
   const plotW = W - padL - padR, plotH = H - padT - padB;
-  const xF = i => padL + i * plotW / Math.max(1, m - 1);
+  const xF = i => {
+    if (!ZOOM) return padL + i * plotW / Math.max(1, m - 1);
+    const span = Math.max(1, ZOOM.i1 - ZOOM.i0);
+    return padL + (i - ZOOM.i0) * plotW / span;
+  };
 
   // 大标题（醒目）+ 副标题（今日与预测区间）
   fctx.fillStyle = "#111827"; fctx.font = "bold 20px sans-serif"; fctx.textAlign = "center";
@@ -1134,9 +1168,11 @@ function drawFuture() {
     fctx.textAlign = "right"; fctx.fillText(v.toFixed(2), padL - 8, y + 4);
   }
 
-  // x 轴日期（MM-DD）
+  // x 轴日期（MM-DD），放大时只标可见范围
   fctx.textAlign = "center";
-  for (let i = 0; i < m; i++) {
+  const fz = ZOOM ? [ZOOM.i0, ZOOM.i1] : [0, m - 1];
+  const fstep = Math.max(1, Math.ceil((fz[1] - fz[0]) / 8));
+  for (let i = fz[0]; i <= fz[1]; i += fstep) {
     const dt = dates[i] ? dates[i].slice(5) : ("+" + (i + 1));
     fctx.fillText(dt, xF(i), H - padB + 18);
   }
@@ -1197,7 +1233,8 @@ function drawPinLine(v) {
   const i = pin.i;
   if (v === "future") {
     const padL = 70, padR = 24, padT = 60, padB = 46, plotW = W - padL - padR, m = 10;
-    const x = padL + i * plotW / Math.max(1, m - 1);
+    const x = ZOOM ? padL + (i - ZOOM.i0) * plotW / Math.max(1, ZOOM.i1 - ZOOM.i0)
+                   : padL + i * plotW / Math.max(1, m - 1);
     fctx.strokeStyle = "rgba(17,24,39,0.5)"; fctx.setLineDash([4,4]); fctx.lineWidth = 1.2;
     fctx.beginPath(); fctx.moveTo(x, padT); fctx.lineTo(x, H - padB); fctx.stroke();
     fctx.setLineDash([]);
@@ -1219,7 +1256,11 @@ function drawFutureTooltip() {
     const padL = 70, padR = 24, padT = 60, padB = 46;
     const plotW = W - padL - padR;
     const m = 10;
-    const xF = j => padL + j * plotW / Math.max(1, m - 1);
+    const xF = j => {
+      if (!ZOOM) return padL + j * plotW / Math.max(1, m - 1);
+      const span = Math.max(1, ZOOM.i1 - ZOOM.i0);
+      return padL + (j - ZOOM.i0) * plotW / span;
+    };
     const i = Math.round((px - padL) / (plotW / Math.max(1, m - 1)));
     if (i < 0 || i >= m) { tip.style.display = "none"; return; }
     drawFuture();
@@ -1417,12 +1458,14 @@ function showPinTip(v) {
   if (!pin || pin.view !== v || !D || !n || pin.i == null) { tip.style.display = "none"; return; }
   const i = pin.i;
   tip.innerHTML = tipContentFor(v, i);
+  const zooming = document.getElementById("zoomOverlay").style.display !== "none";
   const cvs = v === "future" ? fcv : cv;
-  const rect = cvs.getBoundingClientRect();
+  const rect = zooming ? document.getElementById("zoomCanvas").getBoundingClientRect() : cvs.getBoundingClientRect();
   let x;
   if (v === "future") {
     const padL = 70, padR = 24, plotW = W - padL - padR, m = 10;
-    x = padL + i * plotW / Math.max(1, m - 1);
+    x = ZOOM ? padL + (i - ZOOM.i0) * plotW / Math.max(1, ZOOM.i1 - ZOOM.i0)
+             : padL + i * plotW / Math.max(1, m - 1);
   } else {
     x = xOf(i);
   }
@@ -1481,6 +1524,172 @@ function drawTooltip() {
     showPinTip(view);
   };
 }
+
+// ---- 全屏放大（双击图表进入；滚轮缩放横轴、左键拖拽平移、单击锁定）----
+function enterZoom() {
+  if (!D || !n) return;
+  const total = zoomTotalIdx();
+  ZOOM = {i0: 0, i1: total};
+  document.getElementById("zoomOverlay").style.display = "flex";
+  drawZoomCanvas();
+  setStatus("放大模式：滚轮缩放横轴，左键拖拽平移，单击锁定参考线，右上角 ✕ 关闭");
+}
+
+function exitZoom() {
+  ZOOM = null;
+  _zoomDrag = null;
+  document.getElementById("zoomOverlay").style.display = "none";
+  document.getElementById("pinTip").style.display = "none";
+  document.getElementById("zoomCanvas").style.cursor = "";
+}
+
+function drawZoomCanvas() {
+  const zc = document.getElementById("zoomCanvas");
+  const zctx = zc.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  const fw = Math.max(400, window.innerWidth - 60);
+  const fh = Math.max(300, window.innerHeight - 60);
+  zc.width = Math.round(fw * dpr);
+  zc.height = Math.round(fh * dpr);
+  zc.style.width = fw + "px";
+  zc.style.height = fh + "px";
+  const rw = zc.getBoundingClientRect().width || fw;
+  const rh = zc.getBoundingClientRect().height || fh;
+  zctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  zctx.clearRect(0, 0, fw, fh);
+  zctx.scale(rw / W, rh / H);
+  // 临时把全局绘制目标切到放大画布（坐标系已缩放为 W×H），复用原绘制函数
+  const saveCtx = ctx, saveFctx = fctx;
+  ctx = zctx; fctx = zctx;
+  try {
+    if (view === "future") drawFuture();
+    else if (view === "fit") drawFit();
+    else paint(currentType);
+    drawPinLine(view);
+  } finally {
+    ctx = saveCtx; fctx = saveFctx;
+  }
+}
+
+// 放大模式下鼠标位置 → 天数索引（浮点）
+function zoomIdxFromClientX(clientX) {
+  const zc = document.getElementById("zoomCanvas");
+  const rect = zc.getBoundingClientRect();
+  const zx = (clientX - rect.left) * W / rect.width;
+  const span = Math.max(1, ZOOM.i1 - ZOOM.i0);
+  if (view === "future") {
+    const padL = 70, padR = 24, plotW = W - padL - padR;
+    return ZOOM.i0 + (zx - padL) * span / plotW;
+  }
+  return ZOOM.i0 + (zx - PAD.L) * span / (W - PAD.L - PAD.R);
+}
+
+// 放大模式下画十字线（叠加在已绘制的图上）
+function drawZoomCrosshair(fi) {
+  const zc = document.getElementById("zoomCanvas");
+  const zctx = zc.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  const rect = zc.getBoundingClientRect();
+  zctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  zctx.scale(rect.width / W, rect.height / H);
+  zctx.strokeStyle = "rgba(0,0,0,0.35)"; zctx.setLineDash([4,4]); zctx.lineWidth = 1;
+  const span = Math.max(1, ZOOM.i1 - ZOOM.i0);
+  if (view === "future") {
+    const padL = 70, padR = 24, plotW = W - padL - padR;
+    const x = padL + (fi - ZOOM.i0) * plotW / span;
+    zctx.beginPath(); zctx.moveTo(x, 60); zctx.lineTo(x, H - 46); zctx.stroke();
+  } else {
+    const x = xOf(fi);
+    zctx.beginPath(); zctx.moveTo(x, PAD.T); zctx.lineTo(x, H - PAD.B); zctx.stroke();
+  }
+  zctx.setLineDash([]);
+}
+
+(function () {
+  const zc = document.getElementById("zoomCanvas");
+  document.getElementById("zoomClose").addEventListener("click", exitZoom);
+  // 双击图表进入放大
+  cv.addEventListener("dblclick", enterZoom);
+  fcv.addEventListener("dblclick", enterZoom);
+
+  zc.addEventListener("mousemove", e => {
+    if (!ZOOM) return;
+    if (_zoomDrag) {
+      const rect = zc.getBoundingClientRect();
+      const dx = (e.clientX - _zoomDrag.startX) * (W / rect.width);
+      const span = _zoomDrag.i1 - _zoomDrag.i0;
+      const dIdx = Math.round(-dx * span / (W - PAD.L - PAD.R));
+      const total = zoomTotalIdx();
+      let i0 = _zoomDrag.i0 + dIdx;
+      i0 = Math.max(0, Math.min(total - span, i0));
+      ZOOM.i0 = i0; ZOOM.i1 = i0 + span;
+      drawZoomCanvas();
+      _zoomDrag.moved = true;
+      return;
+    }
+    const fi = zoomIdxFromClientX(e.clientX);
+    const i = Math.round(fi);
+    if (i < ZOOM.i0 || i > ZOOM.i1) return;
+    drawZoomCanvas();
+    drawZoomCrosshair(fi);
+    const tip = view === "future" ? document.getElementById("futureTip")
+              : view === "fit" ? document.getElementById("fitTip")
+              : document.getElementById("chartTip");
+    tip.innerHTML = tipContentFor(view, i);
+    tip.style.display = "block";
+    let tx = e.clientX + 14, ty = e.clientY - 10;
+    if (tx + 260 > window.innerWidth) tx = e.clientX - 270;
+    if (ty + 200 > window.innerHeight) ty = window.innerHeight - 210;
+    tip.style.left = tx + "px"; tip.style.top = ty + "px";
+  });
+
+  zc.addEventListener("mouseleave", () => {
+    if (_zoomDrag) return;
+    document.getElementById("chartTip").style.display = "none";
+    document.getElementById("fitTip").style.display = "none";
+    document.getElementById("futureTip").style.display = "none";
+  });
+
+  // 单击锁定参考线（拖拽结束后不触发）
+  zc.addEventListener("click", e => {
+    if (!ZOOM) return;
+    if (_zoomDrag && _zoomDrag.moved) { _zoomDrag = null; return; }
+    const fi = zoomIdxFromClientX(e.clientX);
+    const i = Math.round(fi);
+    if (i < ZOOM.i0 || i > ZOOM.i1) return;
+    window._pin = {view: view, i: i};
+    drawZoomCanvas();
+    showPinTip(view);
+  });
+
+  // 滚轮：以鼠标位置为中心缩放横轴
+  zc.addEventListener("wheel", e => {
+    if (!ZOOM) return;
+    e.preventDefault();
+    const total = zoomTotalIdx();
+    const span = ZOOM.i1 - ZOOM.i0;
+    const fi = zoomIdxFromClientX(e.clientX);
+    const i = Math.max(0, Math.min(total, fi));
+    const factor = e.deltaY > 0 ? 1.3 : 0.75;
+    const newSpan = Math.max(3, Math.min(total, span * factor));
+    const ratio = (i - ZOOM.i0) / Math.max(1, span);
+    let i0 = Math.round(i - newSpan * ratio);
+    i0 = Math.max(0, Math.min(total - newSpan, i0));
+    ZOOM.i0 = i0;
+    ZOOM.i1 = i0 + newSpan;
+    drawZoomCanvas();
+  }, {passive: false});
+
+  // 左键按下拖拽平移
+  zc.addEventListener("mousedown", e => {
+    if (!ZOOM || e.button !== 0) return;
+    _zoomDrag = {startX: e.clientX, i0: ZOOM.i0, i1: ZOOM.i1, moved: false};
+    zc.style.cursor = "grabbing";
+  });
+  window.addEventListener("mouseup", () => {
+    if (_zoomDrag) { _zoomDrag = null; zc.style.cursor = ""; }
+  });
+})();
 
 // ---- 查询流程 ----
 function setStatus(msg) { document.getElementById("status").textContent = msg; }
