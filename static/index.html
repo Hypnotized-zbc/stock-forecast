@@ -118,6 +118,7 @@
              border-radius: 8px; padding: 6px 9px; font-size: 12px; line-height: 1.7;
              box-shadow: 0 2px 10px rgba(0,0,0,.14); pointer-events: none; z-index: 5;
              white-space: nowrap; }
+  #cmpTip { pointer-events: auto; cursor: move; }  /* 锁定浮窗可拖动 */
   .cmp-list { max-height: 220px; overflow: auto; border: 1px solid #e5e7eb;
               border-radius: 8px; padding: 8px; }
   .cmp-item { display: flex; align-items: center; gap: 8px; padding: 5px 6px;
@@ -1644,28 +1645,86 @@ async function doKline(idx) {
 }
 
 // 自选股直接打开（跳过搜索；命中缓存不重新下载）
+// 前端日K → 周K/月K 聚合（请求失败时的兜底，保证周期切换必然生效）
+function aggToPeriod(data, period) {
+  if (period === "day" || !data || !data.dates || !data.dates.length) return null;
+  const N = data.dates.length;
+  const groups = [];
+  let curKey = null;
+  for (let i = 0; i < N; i++) {
+    const dt = new Date(data.dates[i] + "T00:00:00");
+    let key;
+    if (period === "week") {
+      const d0 = new Date(dt);
+      d0.setDate(d0.getDate() - ((d0.getDay() + 6) % 7));  // 回到周一
+      key = d0.toISOString().slice(0, 10);
+    } else {
+      key = dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0");
+    }
+    if (key !== curKey) { groups.push([]); curKey = key; }
+    groups[groups.length - 1].push(i);
+  }
+  const nl = len => new Array(len).fill(null);
+  const out = {name: data.name, dates: [], opens: [], closes: [], highs: [], lows: [], vols: [], changes: []};
+  for (const g of groups) {
+    out.dates.push(data.dates[g[g.length - 1]]);
+    out.opens.push(data.opens[g[0]]);
+    out.closes.push(data.closes[g[g.length - 1]]);
+    let h = -Infinity, l = Infinity, v = 0;
+    for (const i of g) { h = Math.max(h, data.highs[i]); l = Math.min(l, data.lows[i]); v += data.vols[i] || 0; }
+    out.highs.push(h); out.lows.push(l); out.vols.push(v);
+    const c0 = data.closes[g[0]], c1 = data.closes[g[g.length - 1]];
+    out.changes.push(c0 > 0 ? (c1 - c0) / c0 * 100 : 0);
+  }
+  for (const k of ["ma5", "ma20", "boll_up", "boll_mid", "boll_low",
+                   "macd_dif", "macd_dea", "macd_hist", "kdj_k", "kdj_d", "kdj_j", "rsi"]) {
+    out[k] = nl(out.dates.length);
+  }
+  return out;
+}
+
 async function doKlineSecid(secid, name, period) {
   period = period || document.getElementById("chartPeriod").value || "day";
+  const periodLabel = {day: "日K", week: "周K", month: "月K"}[period] || period;
   const cached = getKlineCache(secid, period);
   if (cached) {
     setChartData(cached, name, secid);
-    setStatus("已用今日缓存数据（无需重新下载）");
+    setStatus(name + " " + periodLabel + " 数据已加载（缓存）");
     return;
   }
   const s = document.getElementById("startDate").value;
   const e = document.getElementById("endDate").value;
-  setStatus("下载 " + name + " 数据中（约需 10~30 秒）...");
+  setStatus("下载 " + name + " " + periodLabel + " 数据中（约需 10~30 秒）...");
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 90000);
   try {
     const resp = await fetch("/api/kline?secid=" + encodeURIComponent(secid) +
                              "&start=" + s + "&end=" + e + "&period=" + period, {signal: ctrl.signal});
     const data = await resp.json();
-    if (data.error) { setStatus("下载失败: " + data.error); return; }
+    if (data.error) {
+      // 周期请求失败：用日K缓存前端聚合兜底，保证切换生效
+      const dayCached = getKlineCache(secid, "day");
+      const agg = dayCached ? aggToPeriod(dayCached, period) : null;
+      if (agg) {
+        setChartData(agg, name, secid);
+        setStatus(name + " " + periodLabel + "（日K聚合兜底）");
+      } else {
+        setStatus("下载失败: " + data.error);
+      }
+      return;
+    }
     setKlineCache(secid, data, period);
     setChartData(data, name, secid);
+    setStatus(name + " " + periodLabel + " 数据已加载");
   } catch (err) {
-    setStatus("请求异常或超时: " + err);
+    const dayCached = getKlineCache(secid, "day");
+    const agg = dayCached ? aggToPeriod(dayCached, period) : null;
+    if (agg) {
+      setChartData(agg, name, secid);
+      setStatus(name + " " + periodLabel + "（日K聚合兜底）");
+    } else {
+      setStatus("请求异常或超时: " + err);
+    }
   } finally {
     clearTimeout(timer);
   }
@@ -1828,6 +1887,7 @@ function cmpDataOf(secid) {
 
 let _cmpState = null;  // 对比图绘制上下文（纵线/浮窗用）
 let _cmpPin = null;    // 对比图锁定状态：{xi, tipX, tipY}——双击锁定纵线+浮窗，浮窗可拖动
+let _cmpSize = null;   // 对比图画布尺寸（首次确定后固定，避免鼠标移动重绘导致窗口抖动）
 
 // 对比图小浮窗：填充各股票数值并定位（tipEl 可传跟随浮窗）
 function showCmpTipAt(xi, tipX, tipY, tipEl) {
@@ -1865,13 +1925,19 @@ function drawCompare() {
   if (items.length < 2) { setStatus("对比需要至少 2 支股票（所选日期范围内有数据）"); return; }
   const cv = document.getElementById("compareCanvas");
   cv.style.display = "block";
-  const W2 = cv.parentElement.clientWidth - 40;
-  const H2 = Math.max(300, W2 * 0.55);
-  const dpr = window.devicePixelRatio || 1;
-  cv.width = Math.round(W2 * dpr);
-  cv.height = Math.round(H2 * dpr);
-  cv.style.width = W2 + "px";
-  cv.style.height = H2 + "px";
+  // 尺寸首次确定后固定：mousemove 重绘不重设 canvas 尺寸，避免滚动条出现/消失
+  // 导致 parent 宽度变化 → 窗口大小抖动
+  if (!_cmpSize) {
+    const W2 = cv.parentElement.clientWidth - 40;
+    const H2 = Math.max(300, W2 * 0.55);
+    const dpr = window.devicePixelRatio || 1;
+    cv.width = Math.round(W2 * dpr);
+    cv.height = Math.round(H2 * dpr);
+    cv.style.width = W2 + "px";
+    cv.style.height = H2 + "px";
+    _cmpSize = {W2: W2, H2: H2, dpr: dpr};
+  }
+  const {W2, H2, dpr} = _cmpSize;
   const ctx = cv.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W2, H2);
@@ -1916,11 +1982,14 @@ function drawCompare() {
     ctx.fillText(s.name + " " + (s.vals[s.vals.length - 1] - 100).toFixed(1) + "%",
                  Math.min(lastX + 6, W2 - padR - 130), lastY + 4);
   });
-  // x 轴首尾日期
+  // x 轴日期刻度：均匀显示 5 个（首/尾 + 3 个中间点），避免只显示首尾不完整
   const dts = items[0].dates;
-  ctx.fillStyle = "#888"; ctx.textAlign = "center";
-  ctx.fillText(dts[0] || "", padL, H2 - 10);
-  ctx.fillText(dts[dts.length - 1] || "", W2 - padR, H2 - 10);
+  ctx.fillStyle = "#888"; ctx.textAlign = "center"; ctx.font = "11px sans-serif";
+  const tickCount = 5;
+  for (let t = 0; t < tickCount; t++) {
+    const idx = Math.round(t * (dts.length - 1) / (tickCount - 1));
+    ctx.fillText(dts[idx] || "", xOf(idx), H2 - 10);
+  }
   // 保存状态供纵线/浮窗
   _cmpState = {cv, W2, H2, padL, padR, padT, padB, plotW, plotH, lo, hi, xOf, yOf,
                series, items, len: series[0].vals.length};
@@ -1946,7 +2015,7 @@ cmpCanvas.addEventListener("mousemove", e => {
     c2.strokeStyle = "#2563eb"; c2.lineWidth = 1.5;
     c2.beginPath(); c2.moveTo(st.xOf(_cmpPin.xi), st.padT); c2.lineTo(st.xOf(_cmpPin.xi), st.H2 - st.padB); c2.stroke();
     showCmpTipAt(_cmpPin.xi, _cmpPin.tipX, _cmpPin.tipY);
-    // 跟随浮窗：鼠标在绘图区内则显示鼠标位置数据
+    // 跟随浮窗：鼠标在绘图区内则显示鼠标位置数据（避让锁定浮窗）
     if (x >= st.padL && x <= st.W2 - st.padR && y >= st.padT && y <= st.H2 - st.padB) {
       const xi = Math.max(0, Math.min(st.len - 1, Math.round((x - st.padL) / st.plotW * (st.len - 1))));
       let fx = x + 14, fy = y - 10;
@@ -1956,7 +2025,26 @@ cmpCanvas.addEventListener("mousemove", e => {
       const tw = followTip.offsetWidth, th = followTip.offsetHeight;
       if (fx + tw > st.W2) fx = x - tw - 14;
       if (fy - th < 0) fy = y + 14;
-      showCmpTipAt(xi, fx, fy, followTip);
+      // 与锁定浮窗碰撞避让：重叠时先翻转到锁定浮窗左侧，再不行上下错开
+      const lockEl = document.getElementById("cmpTip");
+      if (lockEl.style.display === "block") {
+        const cRect = cmpCanvas.getBoundingClientRect();
+        const lr = lockEl.getBoundingClientRect();
+        const lockR = {l: lr.left - cRect.left, r: lr.right - cRect.left, t: lr.top - cRect.top, b: lr.bottom - cRect.top};
+        const fr = followTip.getBoundingClientRect();
+        const fR = {l: fr.left - cRect.left, r: fr.right - cRect.left, t: fr.top - cRect.top, b: fr.bottom - cRect.top};
+        if (fR.l < lockR.r && fR.r > lockR.l && fR.t < lockR.b && fR.b > lockR.t) {
+          const flipX = x - tw - 14;
+          if (flipX > st.padL) {
+            fx = flipX;
+          } else if (lockR.t - th - 6 > st.padT) {
+            fy = lockR.t - th - 6;
+          } else {
+            fy = lockR.b + 6;
+          }
+          showCmpTipAt(xi, fx, fy, followTip);
+        }
+      }
     } else {
       followTip.style.display = "none";
     }
@@ -2071,6 +2159,8 @@ document.getElementById("cmpBtn").addEventListener("click", () => {
   ).join("");
   document.getElementById("compareOverlay").style.display = "flex";
   document.getElementById("compareCanvas").style.display = "none";
+  _cmpSize = null;  // 重新打开时重算画布尺寸
+  _cmpPin = null;
 });
 // 日期范围变更自动重绘
 document.getElementById("cmpFrom").addEventListener("change", () => {
