@@ -932,7 +932,7 @@ def ai_insight(secid, name, recent):
                     headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
                     json={"model": LLM_MODEL,
                           "messages": [{"role": "user", "content": prompt}],
-                          "temperature": 0.6, "max_tokens": 600},  # 600 减少截断（断句）
+                          "temperature": 0.6, "max_tokens": 1200},  # 1200 大幅减小截断（断句）概率
                     timeout=20,
                 )
                 resp.raise_for_status()

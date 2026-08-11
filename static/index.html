@@ -2099,7 +2099,8 @@ cmpCanvas.addEventListener("mousemove", e => {
       const tw = followTip.offsetWidth, th = followTip.offsetHeight;
       if (fx + tw > st.W2) fx = x - tw - 14;
       if (fy - th < 0) fy = y + 14;
-      // 与锁定浮窗碰撞避让：重叠时先翻转到锁定浮窗左侧，再不行上下错开
+      // 与锁定浮窗碰撞避让（多级回退 + 二次检查，彻底避免偶发重叠）：
+      // 依次尝试 翻左/上方/下方，每个候选都验证与锁定浮窗不相交，都不行强制下方错开
       const lockEl = document.getElementById("cmpTip");
       if (lockEl.style.display === "block") {
         const cRect = cmpCanvas.getBoundingClientRect();
@@ -2107,14 +2108,24 @@ cmpCanvas.addEventListener("mousemove", e => {
         const lockR = {l: lr.left - cRect.left, r: lr.right - cRect.left, t: lr.top - cRect.top, b: lr.bottom - cRect.top};
         const fr = followTip.getBoundingClientRect();
         const fR = {l: fr.left - cRect.left, r: fr.right - cRect.left, t: fr.top - cRect.top, b: fr.bottom - cRect.top};
-        if (fR.l < lockR.r && fR.r > lockR.l && fR.t < lockR.b && fR.b > lockR.t) {
+        const overlap = (a, b) => a.l < b.r && a.r > b.l && a.t < b.b && a.b > b.t;
+        if (overlap(fR, lockR)) {
+          const candidates = [];
           const flipX = x - tw - 14;
-          if (flipX > st.padL) {
-            fx = flipX;
-          } else if (lockR.t - th - 6 > st.padT) {
-            fy = lockR.t - th - 6;
-          } else {
-            fy = lockR.b + 6;
+          if (flipX > st.padL) candidates.push({fx: flipX, fy: fy});
+          const upY = lockR.t - th - 6;
+          if (upY > st.padT) candidates.push({fx: fx, fy: upY});
+          const downY = lockR.b + 6;
+          if (downY + th < st.H2) candidates.push({fx: fx, fy: downY});
+          let placed = false;
+          for (const c of candidates) {
+            const cR = {l: c.fx, r: c.fx + tw, t: c.fy, b: c.fy + th};
+            if (!overlap(cR, lockR)) { fx = c.fx; fy = c.fy; placed = true; break; }
+          }
+          if (!placed) {
+            // 兜底：强制放到锁定浮窗正下方（必不重叠），再 clamp 画布内
+            fx = Math.max(2, Math.min(x, st.W2 - tw - 2));
+            fy = Math.min(lockR.b + 6, st.H2 - th - 2);
           }
           showCmpTipAt(xi, fx, fy, followTip);
         }
