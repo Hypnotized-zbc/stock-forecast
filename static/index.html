@@ -2248,6 +2248,18 @@ document.getElementById("cmpClose").addEventListener("click", () => {
   _cmpPin = null;
   document.getElementById("compareOverlay").style.display = "none";
 });
+// 点击对比图以外的区域（overlay 背景/控件区/画布容器）清除锁定——与主图"点击图表外清除"一致
+document.getElementById("compareOverlay").addEventListener("click", e => {
+  if (!_cmpPin) return;
+  const cv = document.getElementById("compareCanvas");
+  const tip = document.getElementById("cmpTip");
+  // 图表本身与锁定浮窗（拖动）不触发清除
+  if (e.target === cv || e.target === tip || tip.contains(e.target)) return;
+  _cmpPin = null;
+  document.getElementById("cmpTip").style.display = "none";
+  document.getElementById("cmpFollowTip").style.display = "none";
+  if (_cmpState) drawCompare();
+});
 // ---- 行情卡片分享 ----
 document.getElementById("shareBtn").addEventListener("click", () => {
   if (!D || !n) { setStatus("请先查询股票再分享卡片"); return; }
