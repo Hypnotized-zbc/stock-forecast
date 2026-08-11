@@ -1521,11 +1521,10 @@ try { _watch = JSON.parse(localStorage.getItem("wl") || "[]"); } catch (e) { _wa
 function fmtAmount(v) { if (v==null || !(v>0)) return "—"; if (v>=1e8) return (v/1e8).toFixed(2)+"亿"; if (v>=1e4) return (v/1e4).toFixed(2)+"万"; return v; }
 
 async function refreshAllQuotes() {
-  // 统一刷新：当前股 + 全部自选股（一次批量请求、同一时刻）
-  // 当前股标题涨跌幅与自选股列表用同一份数据，保证两处显示一致
+  // 只请求自选股：当前股标题涨跌幅不单独抓取——直接复用自选股列表数据行，
+  // 自选行渲染后同步标题（同一份 _watchQuotes），保证两处永远一致
   const secids = [];
-  if (_curSecid) secids.push(_curSecid);
-  for (const w of _watch) if (!secids.includes(w.secid)) secids.push(w.secid);
+  for (const w of _watch) if (w && w.secid && !secids.includes(w.secid)) secids.push(w.secid);
   if (!secids.length) return;
   try {
     const resp = await fetch("/api/quotes?secids=" + encodeURIComponent(secids.join(",")));
@@ -1537,7 +1536,6 @@ async function refreshAllQuotes() {
     const map = {};
     for (const q of list) if (q && q.price != null) map[q.secid] = q;
     _watchQuotes = map;
-    if (_curSecid && map[_curSecid]) updateCurQuoteFrom(map[_curSecid]);
     renderWatchQuotes(map);
   } catch (e) {
     setStatus("实时行情获取失败，30 秒后自动重试");
@@ -1554,9 +1552,8 @@ function setChartData(data, name, secid) {
   n = D.dates.length;
   _curSecid = secid;
   // 当前查询股票醒目标题：名称 + 代码 + 涨跌幅（红涨绿跌）
-  // 涨跌幅不再用K线兜底——完全由 refreshAllQuotes 的实时批量行情驱动，
-  // 与自选股列表同一份数据（同一接口、同一时刻），保证两处数值绝对一致；
-  // 实时数据未返回时显示 —，不展示与自选股不同源的旧值
+  // 涨跌幅不单独抓取——直接从自选股列表数据行同步（syncTitleFromWatch），
+  // 自选行有值标题就有，自选行无数据标题显示 —，两处永远一致
   const code = String(secid || "").split(".")[1] || "";
   document.getElementById("curStock").innerHTML =
     (data.name || name) + "<span class='code'>" + code + "</span>" +
@@ -1578,15 +1575,22 @@ function setChartData(data, name, secid) {
 
 function saveWatch() { try { localStorage.setItem("wl", JSON.stringify(_watch)); } catch (e) {} }
 
-// 用批量行情数据更新当前股标题涨跌幅（与自选股同一接口同一时刻，保证一致）
-function updateCurQuoteFrom(q) {
-  if (!q || q.price == null || !(q.price > 0) || q.change_pct == null) return;
+// 当前股标题涨跌幅直接从自选股列表数据行同步（不单独抓取当前股）：
+// 自选行有有效行情时标题显示同一数值；自选行无数据时标题显示 —（两处一致）
+function syncTitleFromWatch() {
   const el = document.querySelector("#curStock .chg");
   if (!el) return;
-  const up = q.change_pct >= 0;
-  el.textContent = (up ? "+" : "") + q.change_pct.toFixed(2) + "%";
-  el.style.color = up ? UP : DOWN;
-  el.style.fontWeight = "600";  // 覆盖占位态的灰字浅重，恢复醒目样式
+  const q = _watchQuotes[_curSecid];
+  if (_curSecid && q && q.price != null && q.price > 0 && q.change_pct != null) {
+    const up = q.change_pct >= 0;
+    el.textContent = (up ? "+" : "") + q.change_pct.toFixed(2) + "%";
+    el.style.color = up ? UP : DOWN;
+    el.style.fontWeight = "600";
+  } else {
+    el.textContent = "—";
+    el.style.color = "#bbb";
+    el.style.fontWeight = "400";
+  }
 }
 function renderWatchlist() {
   const bar = document.getElementById("watchlist");
@@ -1632,6 +1636,8 @@ function renderWatchQuotes(map) {
     set("wl-pb", q.pb!=null ? q.pb.toFixed(2) : "—");
     set("wl-cap", fmtAmount(q.mktcap));
   }
+  // 自选行渲染后同步当前股标题涨跌幅（同一份数据，保证两处一致）
+  syncTitleFromWatch();
 }
 function addWatch(secid, name, code) {
   if (_watch.some(w => w.secid === secid)) { setStatus("已在自选中"); return; }

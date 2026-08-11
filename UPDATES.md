@@ -1,5 +1,20 @@
 # 更新报告
 
+## v0.9.12 (2026-08-11)
+- 当前股标题涨跌幅不再单独抓取（用户要求，此前"不是不一样就是不显示/读取不到"）：
+  - refreshAllQuotes 只请求自选股 secids（不再并入 _curSecid），删除
+    updateCurQuoteFrom 独立更新路径
+  - 新增 syncTitleFromWatch：标题涨跌幅直接从自选股列表数据行同步——
+    自选行有有效行情时标题显示同一数值（同值同色），自选行无数据/当前股
+    不在自选列表时标题显示灰色 —，与自选股行状态永远一致
+  - renderWatchQuotes 每次渲染自选行后自动同步标题
+- 验证：
+  - Edge CDP：注入模拟行情 +1.68% 与 -1.23% 两处文本与颜色一致；
+    当前股不在自选列表（_watchQuotes 无数据）标题 —；
+    请求失败（_watchQuotes 空）标题 —
+  - 静态 14 项断言全过（只请求自选股、无 updateCurQuoteFrom 残留、
+    syncTitleFromWatch 联动、标题占位 —、无 K线兜底、视图重绘、自动下载等回归）
+
 ## v0.9.11 (2026-08-11)
 - 修复未来预测模块点击自选股不切换（用户报告）：
   - 根因：setChartData 切换股票后只调 paint(currentType) 重绘行情画布——
