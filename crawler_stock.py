@@ -781,8 +781,6 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   .wl-price { min-width: 72px; font-weight: 700; font-size: 15px; }
   .wl-chg { width: 72px; }
   .wl-prev { width: 62px; color: #555; }
-  .wl-vol { width: 92px; color: #555; }
-  .wl-amt { width: 92px; color: #555; }
   .wl-pe { width: 62px; color: #555; }
   .wl-pb { width: 62px; color: #555; }
   .wl-cap { width: 92px; color: #555; }
@@ -793,6 +791,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   .row2 { max-width: 1180px; margin: 10px auto 0; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
   select { padding: 7px 12px; font-size: 14px; border: 1px solid #ccc; border-radius: 6px; background: #fff; }
   .sub { color: #888; font-size: 13px; }
+  .cur-stock-line { max-width: 1180px; margin: 10px auto 0; }
   .cur-stock { font-size: 22px; font-weight: 700; color: #111827; }
   .cur-stock .code { font-size: 14px; font-weight: 400; color: #999; margin-left: 6px; }
   .cur-stock .chg { font-size: 15px; font-weight: 600; margin-left: 12px; }
@@ -823,13 +822,15 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   <div id="candidateBox"></div>
   <div id="watchlist" class="wl-bar"></div>
 </div>
+<div class="cur-stock-line">
+  <span class="cur-stock" id="curStock"><span class="cur-none">尚未查询股票</span></span>
+</div>
 <div class="tabs">
   <button class="tab active" id="tabChart">行情图表</button>
   <button class="tab" id="tabFit">模型拟合</button>
   <button class="tab" id="tabFuture">未来预测</button>
 </div>
 <div class="row2" id="chartControls">
-  <span class="cur-stock" id="curStock"><span class="cur-none">尚未查询股票</span></span>
   <select id="chartType">
     <option value="kline">K线图（蜡烛图）</option>
     <option value="ma5">5日均线图</option>
@@ -1516,9 +1517,7 @@ let _watchQuotes = {};
 let _watch = [];
 try { _watch = JSON.parse(localStorage.getItem("wl") || "[]"); } catch (e) { _watch = []; }
 
-function fmtVol(v) { if (v==null || !(v>0)) return "—"; if (v>=1e8) return (v/1e8).toFixed(2)+"亿手"; if (v>=1e4) return (v/1e4).toFixed(2)+"万手"; return v+"手"; }
 function fmtAmount(v) { if (v==null || !(v>0)) return "—"; if (v>=1e8) return (v/1e8).toFixed(2)+"亿"; if (v>=1e4) return (v/1e4).toFixed(2)+"万"; return v; }
-function fmtShares(v) { if (v==null) return "—"; if (v>=1e8) return (v/1e8).toFixed(2)+"亿股"; return v; }
 
 async function refreshAllQuotes() {
   // 统一刷新全部自选股（一次批量请求，同一时刻）
@@ -1548,7 +1547,8 @@ function startQuoteTimer() {
 function setChartData(data, name, secid) {
   D = data;
   n = D.dates.length;
-  // 当前查询股票醒目标题：名称 + 代码 + 最新涨跌幅（红涨绿跌）
+  // 当前查询股票醒目标题：名称 + 代码 + 涨跌幅（红涨绿跌）
+  // 先用K线最后交易日涨跌幅兜底，随后用实时行情刷新（与自选股数据源一致）
   const code = String(secid || "").split(".")[1] || "";
   const lc = D.changes && D.changes.length ? D.changes[n-1] : null;
   let chgHtml = "";
@@ -1559,6 +1559,7 @@ function setChartData(data, name, secid) {
   }
   document.getElementById("curStock").innerHTML =
     (data.name || name) + "<span class='code'>" + code + "</span>" + chgHtml;
+  updateCurQuote(secid);
   document.getElementById("rangeInfo").textContent =
     (data.name || name) + " | " + D.dates[0] + " ~ " + D.dates[n-1] + " | 共 " + n + " 个交易日";
   document.getElementById("candidateBox").innerHTML = "";
@@ -1569,6 +1570,21 @@ function setChartData(data, name, secid) {
 }
 
 function saveWatch() { try { localStorage.setItem("wl", JSON.stringify(_watch)); } catch (e) {} }
+
+// 用实时行情刷新当前股标题涨跌幅（与自选股实时行情同源）；失败则保留K线兜底值
+async function updateCurQuote(secid) {
+  if (!secid) return;
+  try {
+    const resp = await fetch("/api/quote?secid=" + encodeURIComponent(secid));
+    const q = await resp.json();
+    if (!q || q.error || q.price == null || !(q.price > 0) || q.change_pct == null) return;
+    const el = document.querySelector("#curStock .chg");
+    if (!el) return;
+    const up = q.change_pct >= 0;
+    el.textContent = (up ? "+" : "") + q.change_pct.toFixed(2) + "%";
+    el.style.color = up ? UP : DOWN;
+  } catch (e) {}
+}
 function renderWatchlist() {
   const bar = document.getElementById("watchlist");
   if (!_watch.length) { bar.innerHTML = "<div class='wl-empty'>自选股（查询候选旁点 ＋ 添加）</div>"; return; }
@@ -1578,8 +1594,6 @@ function renderWatchlist() {
       "<span class='wl-price'>最新价</span>" +
       "<span class='wl-chg'>涨跌幅</span>" +
       "<span class='wl-prev'>昨收</span>" +
-      "<span class='wl-vol'>成交量</span>" +
-      "<span class='wl-amt'>成交额</span>" +
       "<span class='wl-pe'>PE</span>" +
       "<span class='wl-pb'>PB</span>" +
       "<span class='wl-cap'>总市值</span>" +
@@ -1589,8 +1603,8 @@ function renderWatchlist() {
       "<span class='wl-name'>"+w.name+" <b>"+w.code+"</b></span>" +
       "<span class='wl-price' style='color:#999'>正在查询数据</span>" +
       "<span class='wl-chg'></span>" +
-      "<span class='wl-prev'></span><span class='wl-vol'></span>" +
-      "<span class='wl-amt'></span><span class='wl-pe'></span>" +
+      "<span class='wl-prev'></span>" +
+      "<span class='wl-pe'></span>" +
       "<span class='wl-pb'></span><span class='wl-cap'></span>" +
       "<span class='wl-x' data-rm='"+w.secid+"'>×</span>" +
     "</div>"
@@ -1611,8 +1625,6 @@ function renderWatchQuotes(map) {
     if (cg) { cg.textContent = (q.change_pct != null && !isNaN(q.change_pct))
         ? (up?"+":"")+q.change_pct.toFixed(2)+"%" : "—"; cg.style.color = color; }
     set("wl-prev", q.prev_close>0 ? q.prev_close.toFixed(2) : "—");
-    set("wl-vol", fmtVol(q.volume));
-    set("wl-amt", fmtAmount(q.amount));
     set("wl-pe", q.pe!=null ? q.pe.toFixed(2) : "—");
     set("wl-pb", q.pb!=null ? q.pb.toFixed(2) : "—");
     set("wl-cap", fmtAmount(q.mktcap));
