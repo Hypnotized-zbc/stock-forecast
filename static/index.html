@@ -55,15 +55,6 @@
             box-shadow: 0 2px 8px rgba(0,0,0,.06); padding: 10px 14px; }
   .wl-head { font-size: 13px; color: #999; margin-bottom: 6px; }
   .wl-head-row { color: #999; font-size: 12px; cursor: default; padding-top: 4px; padding-bottom: 4px; }
-  .wl-mode { margin-left: auto; padding: 2px 10px; border: 1px solid #d1d5db; border-radius: 6px;
-             background: #fff; cursor: pointer; font-size: 12px; }
-  .heat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
-               gap: 8px; margin-top: 10px; }
-  .heat-cell { border-radius: 8px; padding: 10px 8px; text-align: center; cursor: pointer;
-               color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.25); }
-  .heat-cell:hover { opacity: .85; }
-  .hc-name { font-size: 13px; font-weight: 600; }
-  .hc-chg { font-size: 12px; margin-top: 3px; }
   .wl-head-row:hover { background: transparent; }
   .wl-row { display: flex; align-items: center; gap: 14px; padding: 7px 4px;
             border-top: 1px solid #f0f0f0; cursor: pointer; font-size: 13px; }
@@ -1403,7 +1394,6 @@ let _quoteTimer = null;
 let _watchQuotes = {};
 let _lastQuoteTs = null;  // 最近一次实时行情刷新时间（时间戳显示）
 let _lastManualRefresh = 0;  // 手动刷新节流：10s 内不重复请求
-let _wlMode = "list";     // 自选股显示模式：list=列表 / grid=热力图
 let _aiCache = {};        // AI 解读缓存：secid_周期 → 文本（localStorage 持久化）
 let _aiPanelOpen = false; // AI 窗口开关状态：点击打开/再点关闭（缓存保留）
 let _aiReqToken = 0;      // AI 请求序号：防止连续切换股票时旧响应覆盖新面板
@@ -1435,6 +1425,7 @@ async function refreshAllQuotes() {
     renderWatchQuotes(map);
     const ts = document.getElementById("wlTs");
     if (ts) ts.textContent = "自选股实时行情 · 更新于 " + fmtTime(_lastQuoteTs);
+    setStatus("行情已更新 " + fmtTime(_lastQuoteTs));
   } catch (e) {
     setStatus("实时行情获取失败，30 秒后自动重试");
   }
@@ -1512,8 +1503,7 @@ function renderWatchlist() {
   const bar = document.getElementById("watchlist");
   if (!_watch.length) { bar.innerHTML = "<div class='wl-empty'>自选股（查询候选旁点 ＋ 添加）</div>"; return; }
   bar.innerHTML = "<div class='wl-head' style='display:flex;align-items:center;gap:8px'><span id='wlTs'>自选股实时行情 · " + (_lastQuoteTs ? "更新于 " + fmtTime(_lastQuoteTs) : "每30秒统一刷新") + "</span>" +
-    "<button id='wlModeBtn' class='wl-mode'>" + (_wlMode === "grid" ? "☰ 列表" : "▦ 热力图") + "</button>" +
-    "<button id='wlRefreshBtn' style='padding:2px 10px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;font-size:12px;color:#4b5563' " +
+    "<button id='wlRefreshBtn' style='margin-left:auto;padding:2px 10px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;font-size:12px;color:#4b5563' " +
     (Date.now() - _lastManualRefresh < 10000 ? "disabled" : "") + ">" +
     (Date.now() - _lastManualRefresh < 10000 ? "刷新(10s)" : "🔄 刷新") + "</button></div>" +
     "<div class='wl-row wl-head-row'>" +
@@ -1539,28 +1529,6 @@ function renderWatchlist() {
   renderWatchQuotes(_watchQuotes);
 }
 function renderWatchQuotes(map) {
-  // 热力图模式：按涨跌幅着色的网格（红涨绿跌，颜色深度随幅度）
-  if (_wlMode === "grid") {
-    let html = "";
-    for (const w of _watch) {
-      const q = map[w.secid];
-      const pct = q && q.change_pct != null ? q.change_pct : null;
-      const bg = pct == null ? "#9ca3af"
-        : pct >= 0 ? "rgba(224,52,52," + Math.min(0.92, 0.28 + Math.abs(pct) / 12) + ")"
-        : "rgba(8,153,129," + Math.min(0.92, 0.28 + Math.abs(pct) / 12) + ")";
-      html += "<div class='heat-cell' data-secid='" + w.secid + "' style='background:" + bg + "'>" +
-              "<div class='hc-name'>" + w.name + "</div>" +
-              "<div class='hc-chg'>" + (pct != null ? (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%" : "—") + "</div></div>";
-    }
-    const old = document.querySelector("#watchlist .heat-grid");
-    if (old) old.remove();
-    const wrap = document.createElement("div");
-    wrap.className = "heat-grid";
-    wrap.innerHTML = html;
-    document.getElementById("watchlist").appendChild(wrap);
-    syncTitleFromWatch();
-    return;
-  }
   for (const row of document.querySelectorAll(".wl-row")) {
     const q = map[row.dataset.secid];
     // 无效行情（无数据/价格为0）不渲染，保持"正在查询数据"，避免显示 000
@@ -1696,27 +1664,29 @@ document.getElementById("watchlist").addEventListener("click", e => {
   const rBtn = e.target.closest("#wlRefreshBtn");
   if (rBtn) {
     const now = Date.now();
-    if (now - _lastManualRefresh < 10000) { setStatus("刷新太频繁，请 10 秒后再试"); return; }
+    if (now - _lastManualRefresh < 10000) { setStatus("刷新太频繁，请稍后再试"); return; }
     _lastManualRefresh = now;
     rBtn.disabled = true;
-    rBtn.textContent = "刷新(10s)";
+    setStatus("正在刷新行情...");
     refreshAllQuotes();
-    setTimeout(() => {
+    // 按钮倒计时：10s 逐秒递减，归零后恢复
+    let remain = 10;
+    rBtn.textContent = remain + "s";
+    const iv = setInterval(() => {
+      remain--;
       const b = document.getElementById("wlRefreshBtn");
-      if (b) { b.disabled = false; b.textContent = "🔄 刷新"; }
-    }, 10000);
-    return;
-  }
-  const modeBtn = e.target.closest("#wlModeBtn");
-  if (modeBtn) {
-    _wlMode = _wlMode === "grid" ? "list" : "grid";
-    renderWatchlist();
-    renderWatchQuotes(_watchQuotes);
+      if (remain <= 0) {
+        clearInterval(iv);
+        if (b) { b.disabled = false; b.textContent = "🔄 刷新"; }
+      } else if (b) {
+        b.textContent = remain + "s";
+      }
+    }, 1000);
     return;
   }
   const rm = e.target.closest(".wl-x");
   if (rm && rm.dataset.rm) { removeWatch(rm.dataset.rm); return; }
-  const row = e.target.closest(".wl-row, .heat-cell");
+  const row = e.target.closest(".wl-row");
   if (row) {
     const w = _watch.find(x => x.secid === row.dataset.secid);
     if (w) doKlineSecid(w.secid, w.name);
