@@ -586,7 +586,7 @@ def fetch_quotes(secids):
             "secids": ",".join(secids), "fltt": "2", "invt": "2",
             "fields": "f2,f3,f5,f6,f9,f12,f13,f14,f18,f20,f21,f23",
         }
-        data = get_json(url, params, retries=2)  # 行情类接口快速失败，尽早切换备用源
+        data = get_json(url, params, retries=3)  # 3 次重试提高基本面字段(PE/PB)命中率
         diff = (data.get("data") or {}).get("diff") or []
         out = []
         for it in diff:
@@ -614,8 +614,21 @@ def fetch_quotes(secids):
             return out
     except Exception as exc:
         print(f"[quotes] 东财批量失败: {exc}")
-    # 回退：逐只新浪（无基本面字段）
-    return [q for q in (fetch_quote(s) for s in secids) if q]
+    # 回退：逐只新浪（新浪无 PE/PB 字段）→ PE/PB 用东财单股接口补齐，
+    # 避免新浪回退时基本面信息缺失
+    fallback = [q for q in (fetch_quote(s) for s in secids) if q]
+    for q in fallback:
+        if q.get("pe") is None or q.get("pb") is None:
+            try:
+                em = _quote_eastmoney(q["secid"])
+                if em:
+                    if q.get("pe") is None:
+                        q["pe"] = em.get("pe")
+                    if q.get("pb") is None:
+                        q["pb"] = em.get("pb")
+            except Exception:
+                pass
+    return fallback
 
 
 def fetch_quote(secid):

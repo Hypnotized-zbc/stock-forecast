@@ -1402,6 +1402,7 @@ let _curName = "";
 let _quoteTimer = null;
 let _watchQuotes = {};
 let _lastQuoteTs = null;  // 最近一次实时行情刷新时间（时间戳显示）
+let _lastManualRefresh = 0;  // 手动刷新节流：10s 内不重复请求
 let _wlMode = "list";     // 自选股显示模式：list=列表 / grid=热力图
 let _aiCache = {};        // AI 解读缓存：secid_周期 → 文本（localStorage 持久化）
 let _aiPanelOpen = false; // AI 窗口开关状态：点击打开/再点关闭（缓存保留）
@@ -1432,8 +1433,8 @@ async function refreshAllQuotes() {
     _watchQuotes = map;
     _lastQuoteTs = Date.now();
     renderWatchQuotes(map);
-    const head = document.querySelector("#watchlist .wl-head");
-    if (head) head.textContent = "自选股实时行情 · 更新于 " + fmtTime(_lastQuoteTs);
+    const ts = document.getElementById("wlTs");
+    if (ts) ts.textContent = "自选股实时行情 · 更新于 " + fmtTime(_lastQuoteTs);
   } catch (e) {
     setStatus("实时行情获取失败，30 秒后自动重试");
   }
@@ -1510,8 +1511,11 @@ function syncTitleFromWatch() {
 function renderWatchlist() {
   const bar = document.getElementById("watchlist");
   if (!_watch.length) { bar.innerHTML = "<div class='wl-empty'>自选股（查询候选旁点 ＋ 添加）</div>"; return; }
-  bar.innerHTML = "<div class='wl-head' style='display:flex;align-items:center;gap:8px'><span>自选股实时行情 · " + (_lastQuoteTs ? "更新于 " + fmtTime(_lastQuoteTs) : "每30秒统一刷新") + "</span>" +
-    "<button id='wlModeBtn' class='wl-mode'>" + (_wlMode === "grid" ? "☰ 列表" : "▦ 热力图") + "</button></div>" +
+  bar.innerHTML = "<div class='wl-head' style='display:flex;align-items:center;gap:8px'><span id='wlTs'>自选股实时行情 · " + (_lastQuoteTs ? "更新于 " + fmtTime(_lastQuoteTs) : "每30秒统一刷新") + "</span>" +
+    "<button id='wlModeBtn' class='wl-mode'>" + (_wlMode === "grid" ? "☰ 列表" : "▦ 热力图") + "</button>" +
+    "<button id='wlRefreshBtn' style='padding:2px 10px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;font-size:12px;color:#4b5563' " +
+    (Date.now() - _lastManualRefresh < 10000 ? "disabled" : "") + ">" +
+    (Date.now() - _lastManualRefresh < 10000 ? "刷新(10s)" : "🔄 刷新") + "</button></div>" +
     "<div class='wl-row wl-head-row'>" +
       "<span class='wl-name'>名称</span>" +
       "<span class='wl-price'>最新价</span>" +
@@ -1689,6 +1693,20 @@ document.getElementById("candidateBox").addEventListener("click", e => {
   if (b) doKline(Number(b.dataset.i));
 });
 document.getElementById("watchlist").addEventListener("click", e => {
+  const rBtn = e.target.closest("#wlRefreshBtn");
+  if (rBtn) {
+    const now = Date.now();
+    if (now - _lastManualRefresh < 10000) { setStatus("刷新太频繁，请 10 秒后再试"); return; }
+    _lastManualRefresh = now;
+    rBtn.disabled = true;
+    rBtn.textContent = "刷新(10s)";
+    refreshAllQuotes();
+    setTimeout(() => {
+      const b = document.getElementById("wlRefreshBtn");
+      if (b) { b.disabled = false; b.textContent = "🔄 刷新"; }
+    }, 10000);
+    return;
+  }
   const modeBtn = e.target.closest("#wlModeBtn");
   if (modeBtn) {
     _wlMode = _wlMode === "grid" ? "list" : "grid";
