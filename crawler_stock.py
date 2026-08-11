@@ -1307,10 +1307,7 @@ function drawFutureTooltip() {
     // 浮窗：真实收盘 + 5 模型预测 + 最终加权
     tip.innerHTML = tipContentFor("future", i);
     tip.style.display = "block";
-    let tx = e.clientX + 14, ty = e.clientY - 10;
-    if (tx + 260 > window.innerWidth) tx = e.clientX - 270;
-    if (ty + 200 > window.innerHeight) ty = window.innerHeight - 210;
-    tip.style.left = tx + "px"; tip.style.top = ty + "px";
+    placeHoverTip(tip, e.clientX, e.clientY);
   };
   fcv.onmouseleave = () => { document.getElementById("futureTip").style.display = "none"; };
   // 单击固定一条参考线——延时执行区分双击（双击进入放大时取消，避免冲突）
@@ -1551,6 +1548,46 @@ function showPinTip(v) {
   tip.style.display = "block";
 }
 
+// hover 浮动窗口定位：优先鼠标右侧，屏幕越界翻转；与固定窗口(pinTip)
+// 碰撞时避让（滞回保持当前侧，避免左右抽搐）
+function placeHoverTip(tip, mx, my) {
+  const tipW = tip.offsetWidth || 260;
+  const tipH = tip.offsetHeight || 120;
+  let x = mx + 14;
+  if (x + tipW > window.innerWidth) x = mx - tipW - 14;
+  let y = my - 10;
+  if (y + tipH > window.innerHeight) y = window.innerHeight - tipH - 10;
+  if (y < 0) y = 0;
+  // 与固定窗口碰撞避让（pinTip 可见时）
+  const pr = document.getElementById("pinTip").getBoundingClientRect();
+  if (pr.width > 0 && pr.height > 0) {
+    const overlap = x < pr.right && x + tipW > pr.left && y < pr.bottom && y + tipH > pr.top;
+    if (overlap) {
+      // 滞回：优先保持当前水平侧，两侧都可用才考虑翻转，避免左右抽搐
+      const cur = tip._tipSide || "right";
+      const sides = {right: mx + 14, left: mx - tipW - 14};
+      const usable = {};
+      for (const s of ["right", "left"]) {
+        const sx = sides[s];
+        usable[s] = sx >= 0 && sx + tipW <= window.innerWidth &&
+                    !(sx < pr.right && sx + tipW > pr.left && y < pr.bottom && y + tipH > pr.top);
+      }
+      if (usable[cur]) x = sides[cur];
+      else if (usable.right) { x = sides.right; tip._tipSide = "right"; }
+      else if (usable.left) { x = sides.left; tip._tipSide = "left"; }
+      else {
+        // 两侧都不可用：上下避让（优先固定窗口上方，其次下方）
+        if (pr.top - tipH - 6 >= 0) y = pr.top - tipH - 6;
+        else y = pr.bottom + 6;
+      }
+    } else {
+      tip._tipSide = "right";  // 未碰撞时重置默认侧
+    }
+  }
+  tip.style.left = x + "px";
+  tip.style.top = y + "px";
+}
+
 function drawTooltip() {
   cv.style.cursor = "default";  // 未录入股票时正常光标（有数据进入时改 crosshair）
   cv.onmousemove = e => {
@@ -1569,20 +1606,14 @@ function drawTooltip() {
       const tip = document.getElementById("fitTip");
       tip.innerHTML = tipContentFor("fit", i);
       tip.style.display = "block";
-      let tx = e.clientX + 14, ty = e.clientY - 10;
-      if (tx + 260 > window.innerWidth) tx = e.clientX - 270;
-      if (ty + 200 > window.innerHeight) ty = window.innerHeight - 210;
-      tip.style.left = tx + "px"; tip.style.top = ty + "px";
+      placeHoverTip(tip, e.clientX, e.clientY);
       return;
     }
     // 行情视图：浮动窗口跟随鼠标显示每日数据（右侧固定面板已移除）
     const tip = document.getElementById("chartTip");
     tip.innerHTML = tipContentFor("chart", i);
     tip.style.display = "block";
-    let tx = e.clientX + 14, ty = e.clientY - 10;
-    if (tx + 260 > window.innerWidth) tx = e.clientX - 270;
-    if (ty + 300 > window.innerHeight) ty = window.innerHeight - 310;
-    tip.style.left = tx + "px"; tip.style.top = ty + "px";
+    placeHoverTip(tip, e.clientX, e.clientY);
   };
   cv.onmouseleave = () => {
     document.getElementById("fitTip").style.display = "none";
@@ -1757,10 +1788,7 @@ function drawZoomCrosshair(fi) {
               : document.getElementById("chartTip");
     tip.innerHTML = tipContentFor(view, i);
     tip.style.display = "block";
-    let tx = e.clientX + 14, ty = e.clientY - 10;
-    if (tx + 260 > window.innerWidth) tx = e.clientX - 270;
-    if (ty + 200 > window.innerHeight) ty = window.innerHeight - 210;
-    tip.style.left = tx + "px"; tip.style.top = ty + "px";
+    placeHoverTip(tip, e.clientX, e.clientY);
   });
 
   zc.addEventListener("mouseleave", () => {
