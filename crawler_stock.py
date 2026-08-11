@@ -757,19 +757,6 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
             border: 1px solid #c7d2fe; border-radius: 6px; background: #eef2ff;
             color: #3730a3; cursor: pointer; }
   .wl-add:hover { background: #e0e7ff; }
-  .card-bar { max-width: 1180px; margin: 10px auto 0; background: #fff; border-radius: 10px;
-              box-shadow: 0 2px 8px rgba(0,0,0,.06); padding: 12px 16px;
-              display: flex; flex-wrap: wrap; align-items: center; gap: 18px; font-size: 13px; }
-  .qb-name { font-size: 17px; font-weight: 700; color: #111827; }
-  .qb-code { font-size: 13px; font-weight: 400; color: #999; margin-left: 4px; }
-  .qb-price { font-size: 26px; font-weight: 700; }
-  .qb-item { display: flex; flex-direction: column; gap: 2px; }
-  .qb-item .k { color: #999; font-size: 12px; }
-  .qb-item .v { font-weight: 600; }
-  .qb-time { color: #bbb; font-size: 12px; margin-left: auto; }
-  .qb-refresh { border: 1px solid #d1d5db; background: #fff; border-radius: 6px;
-                padding: 3px 8px; font-size: 14px; cursor: pointer; color: #555; }
-  .qb-refresh:hover { border-color: #2563eb; color: #2563eb; }
   .wl-bar { max-width: 1180px; margin: 8px auto 0; background: #fff; border-radius: 10px;
             box-shadow: 0 2px 8px rgba(0,0,0,.06); padding: 10px 14px; }
   .wl-head { font-size: 13px; color: #999; margin-bottom: 6px; }
@@ -779,7 +766,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   .wl-row:hover { background: #f8fafc; }
   .wl-name { width: 150px; font-weight: 600; color: #111827; }
   .wl-name b { color: #999; font-weight: 400; margin-left: 4px; }
-  .wl-price { width: 72px; font-weight: 700; font-size: 15px; }
+  .wl-price { min-width: 72px; font-weight: 700; font-size: 15px; }
   .wl-chg { width: 72px; }
   .wl-prev { width: 62px; color: #555; }
   .wl-vol { width: 92px; color: #555; }
@@ -820,7 +807,6 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   <div id="candidateBox"></div>
   <div id="watchlist" class="wl-bar"></div>
 </div>
-<div id="quoteBar" class="card-bar" style="display:none"></div>
 <div class="tabs">
   <button class="tab active" id="tabChart">行情图表</button>
   <button class="tab" id="tabFit">模型拟合</button>
@@ -1507,8 +1493,7 @@ async function doSearch() {
   }
 }
 
-// ---- 实时行情 / 基本面 / 自选股 ----
-let _curSecid = null;
+// ---- 实时行情 / 自选股 ----
 let _quoteTimer = null;
 let _watchQuotes = {};
 let _watch = [];
@@ -1519,48 +1504,23 @@ function fmtAmount(v) { if (v==null) return "—"; if (v>=1e8) return (v/1e8).to
 function fmtShares(v) { if (v==null) return "—"; if (v>=1e8) return (v/1e8).toFixed(2)+"亿股"; return v; }
 
 async function refreshAllQuotes() {
-  // 统一刷新：当前股 + 全部自选股（一次批量请求，同一时刻）
-  const secids = [];
-  if (_curSecid) secids.push(_curSecid);
-  for (const w of _watch) if (!secids.includes(w.secid)) secids.push(w.secid);
+  // 统一刷新全部自选股（一次批量请求，同一时刻）
+  const secids = _watch.map(w => w.secid);
   if (!secids.length) return;
   try {
     const resp = await fetch("/api/quotes?secids=" + encodeURIComponent(secids.join(",")));
     const list = await resp.json();
     if (!Array.isArray(list)) {
-      setStatus("实时行情获取失败，30 秒后自动重试，或点行情条 ↻ 手动刷新");
+      setStatus("实时行情获取失败，30 秒后自动重试");
       return;
     }
     const map = {};
     for (const q of list) if (q && q.price != null) map[q.secid] = q;
     _watchQuotes = map;
-    if (_curSecid && map[_curSecid]) renderQuoteBar(map[_curSecid]);
     renderWatchQuotes(map);
   } catch (e) {
-    setStatus("实时行情获取失败，30 秒后自动重试，或点行情条 ↻ 手动刷新");
+    setStatus("实时行情获取失败，30 秒后自动重试");
   }
-}
-
-function renderQuoteBar(q) {
-  const up = q.change_pct >= 0;
-  const color = up ? UP : DOWN;
-  const t = new Date();
-  const ts = [t.getHours(), t.getMinutes(), t.getSeconds()].map(x => String(x).padStart(2,"0")).join(":");
-  const qb = document.getElementById("quoteBar");
-  qb.innerHTML =
-    "<span class='qb-name'>"+(q.name||"—")+" <span class='qb-code'>"+(q.code||"")+"</span></span>" +
-    "<span class='qb-price' style='color:"+color+"'>"+q.price.toFixed(2)+"</span>" +
-    "<span class='qb-item'><span class='k'>涨跌幅</span><span class='v' style='color:"+color+"'>"+(up?"+":"")+q.change_pct.toFixed(2)+"%</span></span>" +
-    "<span class='qb-item'><span class='k'>昨收</span><span class='v'>"+(q.prev_close!=null?q.prev_close.toFixed(2):"—")+"</span></span>" +
-    "<span class='qb-item'><span class='k'>成交量</span><span class='v'>"+fmtVol(q.volume)+"</span></span>" +
-    "<span class='qb-item'><span class='k'>成交额</span><span class='v'>"+fmtAmount(q.amount)+"</span></span>" +
-    "<span class='qb-item'><span class='k'>PE(动)</span><span class='v'>"+(q.pe!=null?q.pe.toFixed(2):"—")+"</span></span>" +
-    "<span class='qb-item'><span class='k'>PB</span><span class='v'>"+(q.pb!=null?q.pb.toFixed(2):"—")+"</span></span>" +
-    "<span class='qb-item'><span class='k'>总市值</span><span class='v'>"+fmtAmount(q.mktcap)+"</span></span>" +
-    "<span class='qb-item'><span class='k'>流通市值</span><span class='v'>"+fmtAmount(q.float_mktcap)+"</span></span>" +
-    "<span class='qb-time'>更新于 "+ts+"</span>" +
-    "<button class='qb-refresh' onclick='refreshAllQuotes()' title='立即刷新'>↻</button>";
-  qb.style.display = "";
 }
 
 function startQuoteTimer() {
@@ -1571,7 +1531,6 @@ function startQuoteTimer() {
 function setChartData(data, name, secid) {
   D = data;
   n = D.dates.length;
-  _curSecid = secid;
   document.getElementById("rangeInfo").textContent =
     (data.name || name) + " | " + D.dates[0] + " ~ " + D.dates[n-1] + " | 共 " + n + " 个交易日";
   document.getElementById("candidateBox").innerHTML = "";
@@ -1588,10 +1547,11 @@ function renderWatchlist() {
   bar.innerHTML = "<div class='wl-head'>自选股实时行情（每30秒统一刷新）</div>" + _watch.map(w =>
     "<div class='wl-row' data-secid='"+w.secid+"'>" +
       "<span class='wl-name'>"+w.name+" <b>"+w.code+"</b></span>" +
-      "<span class='wl-price'>—</span><span class='wl-chg'>—</span>" +
-      "<span class='wl-prev'>—</span><span class='wl-vol'>—</span>" +
-      "<span class='wl-amt'>—</span><span class='wl-pe'>—</span>" +
-      "<span class='wl-pb'>—</span><span class='wl-cap'>—</span>" +
+      "<span class='wl-price' style='color:#999'>正在查询数据</span>" +
+      "<span class='wl-chg'></span>" +
+      "<span class='wl-prev'></span><span class='wl-vol'></span>" +
+      "<span class='wl-amt'></span><span class='wl-pe'></span>" +
+      "<span class='wl-pb'></span><span class='wl-cap'></span>" +
       "<span class='wl-x' data-rm='"+w.secid+"'>×</span>" +
     "</div>"
   ).join("");
