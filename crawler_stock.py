@@ -1549,6 +1549,7 @@ function enterZoom() {
 function exitZoom() {
   ZOOM = null;
   _zoomDrag = null;
+  window._pin = null;  // 退出放大同时清除锁定参考线
   document.getElementById("zoomOverlay").style.display = "none";
   document.getElementById("pinTip").style.display = "none";
   document.getElementById("zoomCanvas").style.cursor = "";
@@ -1700,6 +1701,38 @@ function drawZoomCrosshair(fi) {
   window.addEventListener("mouseup", () => {
     if (_zoomDrag) { _zoomDrag = null; zc.style.cursor = ""; }
   });
+})();
+
+// ---- 点击图表之外：清除锁定参考线与固定窗口 ----
+document.addEventListener("click", e => {
+  const t = e.target;
+  if (t.closest && (t.closest("canvas") || t.closest(".tip-box") || t.closest("#zoomClose"))) return;
+  if (!window._pin) return;
+  window._pin = null;
+  document.getElementById("pinTip").style.display = "none";
+  // 重绘去掉锁定线（放大模式重画放大画布，普通模式按视图重绘）
+  if (ZOOM) drawZoomCanvas();
+  else if (view === "future") drawFuture();
+  else if (view === "fit") drawFit();
+  else paint(currentType);
+});
+
+// ---- 固定窗口可拖动 ----
+(function () {
+  const tip = document.getElementById("pinTip");
+  let drag = null;
+  tip.addEventListener("mousedown", e => {
+    e.preventDefault();  // 防止拖动时选中文本
+    drag = {startX: e.clientX, startY: e.clientY,
+            left: parseFloat(tip.style.left) || 0,
+            top: parseFloat(tip.style.top) || 0};
+  });
+  window.addEventListener("mousemove", e => {
+    if (!drag) return;
+    tip.style.left = (drag.left + (e.clientX - drag.startX)) + "px";
+    tip.style.top = (drag.top + (e.clientY - drag.startY)) + "px";
+  });
+  window.addEventListener("mouseup", () => { drag = null; });
 })();
 
 // ---- 查询流程 ----

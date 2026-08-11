@@ -1,5 +1,22 @@
 # 更新报告
 
+## v0.10.2 (2026-08-11)
+- 点击图表之外的地方：清除已锁定的参考线与固定窗口（用户要求）
+  - document 级 click 监听：点击目标非 canvas/浮窗/关闭叉时，清空
+    window._pin、隐藏 pinTip，并按当前状态重绘（放大模式重画放大画布）
+  - 点击图表内部锁定照常（canvas click 冒泡被排除，不误清）
+  - 放大模式点击遮罩空白同样清除
+  - 退出放大（✕）时同步清除锁定参考线
+- 固定窗口（pinTip）可鼠标拖动（用户要求）：
+  - pinTip 上 mousedown 开始拖动，mousemove 跟随移动，mouseup 停止；
+    preventDefault 防止选中文本；拖动结束的 click 不触发清除
+- 验证（Edge CDP，40 天模拟数据）：
+  - 点击图表锁定 → pin {view:chart,i:19}、窗口显示
+  - 点击页面 h2 标题 → pin null、窗口隐藏；再点图表 → 重新锁定正常
+  - 拖动 pinTip 40px/25px → left/top 精确跟随
+  - 放大模式：点 zoomCanvas 锁定 → 点遮罩空白 → pin null、窗口隐藏
+  - 无 JS 错误
+
 ## v0.10.1 (2026-08-11)
 - 修复放大模式下悬浮窗口消失（用户报告）：
   - 根因：.tip-box z-index 99 低于放大遮罩 #zoomOverlay 的 z-index 1000，
