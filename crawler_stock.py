@@ -906,7 +906,7 @@ function seriesMinMax(arr, padRatio) {
 // ---- 全屏放大状态（双击图表进入；滚轮缩放横轴、左键拖拽平移）----
 let ZOOM = null;       // null=普通模式；{i0, i1}=放大模式可见天数索引范围
 let _zoomDrag = null;  // 拖拽平移状态 {startX, i0, i1, moved}
-let _zoomSuppressClick = false;  // 拖拽结束后标记：随后的 click 不触发锁定
+let _clickTimer = null;  // 普通模式单击/双击区分：双击到达时取消挂起的单击锁定
 let _pinTipManual = null;  // pinTip 手动拖动后的相对图表偏移 {dx, dy}（放大模式生效）
 
 // 可见天数索引范围（普通模式返回全年）
@@ -1310,19 +1310,22 @@ function drawFutureTooltip() {
     tip.style.left = tx + "px"; tip.style.top = ty + "px";
   };
   fcv.onmouseleave = () => { document.getElementById("futureTip").style.display = "none"; };
-  // 单击固定一条参考线（最多一条，再点重选）
-  fcv.onclick = e => {
+  // 单击固定一条参考线——延时执行区分双击（双击进入放大时取消，避免冲突）
+  fcv.addEventListener("click", e => {
     if (!D || !D.fit || !D.fit.arima || !D.fit.arima.predict) return;
-    const rect = fcv.getBoundingClientRect();
-    const px = (e.clientX - rect.left) * W / rect.width;
-    const padL = 70, padR = 24, plotW = W - padL - padR, m = 10;
-    const i = Math.round((px - padL) / (plotW / Math.max(1, m - 1)));
-    if (i < 0 || i >= m) return;
-    window._pin = {view: "future", i: i};
-    _pinTipManual = null;  // 重新锁定后清除手动位置
-    drawFuture();
-    showPinTip("future");
-  };
+    clearTimeout(_clickTimer);
+    _clickTimer = setTimeout(() => {
+      const rect = fcv.getBoundingClientRect();
+      const px = (e.clientX - rect.left) * W / rect.width;
+      const padL = 70, padR = 24, plotW = W - padL - padR, m = 10;
+      const i = Math.round((px - padL) / (plotW / Math.max(1, m - 1)));
+      if (i < 0 || i >= m) return;
+      window._pin = {view: "future", i: i};
+      _pinTipManual = null;  // 重新锁定后清除手动位置
+      drawFuture();
+      showPinTip("future");
+    }, 250);
+  });
 }
 drawFutureTooltip();
 
@@ -1580,18 +1583,21 @@ function drawTooltip() {
     document.getElementById("fitTip").style.display = "none";
     document.getElementById("chartTip").style.display = "none";
   };
-  // 单击固定一条参考线（最多一条，再点重选）
-  cv.onclick = e => {
+  // 单击固定一条参考线——延时执行区分双击（双击进入放大时取消，避免冲突）
+  cv.addEventListener("click", e => {
     if (!D || !n) return;
-    const rect = cv.getBoundingClientRect();
-    const px = (e.clientX-rect.left) * W / rect.width;
-    const i = Math.round((px-PAD.L) * Math.max(1,n-1) / (W-PAD.L-PAD.R));
-    if (i<0 || i>=n) return;
-    window._pin = {view: view, i: i};
-    _pinTipManual = null;  // 重新锁定后清除手动位置
-    if (view === "fit") { drawFit(); } else { paint(currentType); }
-    showPinTip(view);
-    };
+    clearTimeout(_clickTimer);
+    _clickTimer = setTimeout(() => {
+      const rect = cv.getBoundingClientRect();
+      const px = (e.clientX-rect.left) * W / rect.width;
+      const i = Math.round((px-PAD.L) * Math.max(1,n-1) / (W-PAD.L-PAD.R));
+      if (i<0 || i>=n) return;
+      window._pin = {view: view, i: i};
+      _pinTipManual = null;  // 重新锁定后清除手动位置
+      if (view === "fit") { drawFit(); } else { paint(currentType); }
+      showPinTip(view);
+    }, 250);
+  });
 }
 
 // ---- 全屏放大（双击图表进入；滚轮缩放横轴、左键拖拽平移、单击锁定）----
@@ -1729,9 +1735,9 @@ function drawZoomCrosshair(fi) {
 (function () {
   const zc = document.getElementById("zoomCanvas");
   document.getElementById("zoomClose").addEventListener("click", exitZoom);
-  // 双击图表进入放大
-  cv.addEventListener("dblclick", enterZoom);
-  fcv.addEventListener("dblclick", enterZoom);
+  // 双击图表进入放大（到达时取消挂起的单击锁定，避免单击/双击同时触发）
+  cv.addEventListener("dblclick", () => { clearTimeout(_clickTimer); enterZoom(); });
+  fcv.addEventListener("dblclick", () => { clearTimeout(_clickTimer); enterZoom(); });
 
   zc.addEventListener("mousemove", e => {
     if (!ZOOM) return;
@@ -1772,10 +1778,9 @@ function drawZoomCrosshair(fi) {
     document.getElementById("futureTip").style.display = "none";
   });
 
-  // 单击锁定参考线（拖拽结束后不触发：mouseup 已标记，click 消费后跳过）
-  zc.addEventListener("click", e => {
+  // 放大模式双击锁定参考线（不用单击锁定，避免与拖拽冲突）
+  zc.addEventListener("dblclick", e => {
     if (!ZOOM) return;
-    if (_zoomSuppressClick) { _zoomSuppressClick = false; return; }
     const fi = zoomIdxFromClientX(e.clientX);
     const i = Math.round(fi);
     if (i < ZOOM.i0 || i > ZOOM.i1) return;
@@ -1811,12 +1816,7 @@ function drawZoomCrosshair(fi) {
     zc.style.cursor = "grabbing";
   });
   window.addEventListener("mouseup", () => {
-    if (_zoomDrag) {
-      const moved = _zoomDrag.moved;
-      _zoomDrag = null;
-      zc.style.cursor = "";
-      if (moved) _zoomSuppressClick = true;  // 刚拖拽过，随后的 click 不固定
-    }
+    if (_zoomDrag) { _zoomDrag = null; zc.style.cursor = ""; }
   });
 })();
 
