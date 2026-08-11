@@ -1,5 +1,18 @@
 # 更新报告
 
+## v0.10.10 (2026-08-11)
+- 修复放大模式拖拽松手在固定窗口上被误判清除（用户报告 bug）：
+  - 根因：拖拽 mousedown 在 zoomCanvas、鼠标松开在 pinTip 上时，浏览器
+    的 click 事件在两者共同祖先（body）触发，target 非 canvas 也非
+    .tip-box → 被 document"点击图表外清除"逻辑误判，pin 和窗口被清掉
+  - 修复：新增 _zoomDragEnded——mouseup 时（拖拽结束）置标记，
+    document click handler 消费该标记跳过清除；普通点击图表外清除不受影响
+- 验证（Edge CDP，40 天模拟数据）：
+  - 放大模式双击锁定 {view:chart, i:10} + 窗口显示
+  - 拖拽（mousedown+mousemove）→ mouseup 在 pinTip 上 → dispatch body click
+    → pin 保持 i:10、窗口仍显示、标记已消费
+  - 无 JS 错误；静态 12 项断言全过
+
 ## v0.10.9 (2026-08-11)
 - 放大模式锁定改为双击（用户要求，消除单击/拖拽代码冲突）：
   - 删除放大画布 click 锁定与 _zoomSuppressClick 拖拽抑制机制（不再需要），

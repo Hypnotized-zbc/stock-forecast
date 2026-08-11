@@ -906,6 +906,7 @@ function seriesMinMax(arr, padRatio) {
 // ---- 全屏放大状态（双击图表进入；滚轮缩放横轴、左键拖拽平移）----
 let ZOOM = null;       // null=普通模式；{i0, i1}=放大模式可见天数索引范围
 let _zoomDrag = null;  // 拖拽平移状态 {startX, i0, i1, moved}
+let _zoomDragEnded = false;  // 拖拽结束后标记：松手产生的 click 不判定为"点击图表外"
 let _clickTimer = null;  // 普通模式单击/双击区分：双击到达时取消挂起的单击锁定
 let _pinTipManual = null;  // pinTip 手动拖动后的相对图表偏移 {dx, dy}（放大模式生效）
 
@@ -1816,12 +1817,19 @@ function drawZoomCrosshair(fi) {
     zc.style.cursor = "grabbing";
   });
   window.addEventListener("mouseup", () => {
-    if (_zoomDrag) { _zoomDrag = null; zc.style.cursor = ""; }
+    if (_zoomDrag) {
+      _zoomDrag = null;
+      zc.style.cursor = "";
+      // 拖拽结束：松手处（可能落在固定窗口上）随后产生的 click 不触发清除
+      _zoomDragEnded = true;
+    }
   });
 })();
 
 // ---- 点击图表之外：清除锁定参考线与固定窗口 ----
 document.addEventListener("click", e => {
+  // 放大模式拖拽刚结束：松手处的 click（可能在固定窗口上）不触发清除
+  if (_zoomDragEnded) { _zoomDragEnded = false; return; }
   const t = e.target;
   if (t.closest && (t.closest("canvas") || t.closest(".tip-box") || t.closest("#zoomClose"))) return;
   if (!window._pin) return;
