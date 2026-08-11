@@ -1,5 +1,22 @@
 # 更新报告
 
+## v0.10.1 (2026-08-11)
+- 修复放大模式下悬浮窗口消失（用户报告）：
+  - 根因：.tip-box z-index 99 低于放大遮罩 #zoomOverlay 的 z-index 1000，
+    浮窗 DOM 虽显示但被遮罩盖住
+  - 修复：.tip-box z-index 99 → 1002（浮窗始终在遮罩之上，普通模式无副作用）
+- 修复固定线条窗口（pinTip）滚动页面遮挡其他信息（用户报告）：
+  - pinTip 从 fixed 改为 absolute 相对页面（文档坐标）定位：页面滚动时
+    随图表一起移动，不再悬浮在视口固定处遮挡滚动上来的内容
+  - 放大模式下 pinTip 动态切回 fixed（与全屏 overlay 视口定位一致）
+  - 修复 zooming 判断：style.display !== "none" 对 CSS 控制的 display
+    恒为 true（内联未设时为空串）→ 改为 === "flex"
+- 验证（Edge CDP，40 天模拟数据）：
+  - 放大模式 hover 浮窗 z-index 1002 > 遮罩 1000（可见）；pinTip fixed 显示
+  - 普通模式 pinTip position absolute；页面滚动 150px 后其视口 top
+    472 → 322（随内容移动），不再遮挡其他信息
+  - 无 JS 错误
+
 ## v0.10.0 (2026-08-11)
 - 新增图表全屏放大（双击任意图表进入）：
   - 双击行情图表/模型拟合/未来预测任一画布 → 全屏放大：半透明遮罩变暗、

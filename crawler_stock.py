@@ -751,10 +751,11 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   .f-dir { font-size: 13px; font-weight: 600; padding: 3px 0; }
   .f-pred-title { font-size: 12px; color: #888; margin: 8px 0 2px; }
   .f-final { font-size: 14px; font-weight: 700; padding: 4px 0; }
-  .tip-box { position: fixed; z-index: 99; background: #fff; border: 1px solid #ddd;
+  .tip-box { position: fixed; z-index: 1002; background: #fff; border: 1px solid #ddd;
              border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,.15);
              padding: 10px 12px; font-size: 13px; min-width: 220px; display: none;
              font-family: "Microsoft YaHei", sans-serif; }
+  #pinTip { position: absolute; }  /* 固定窗口相对页面定位：滚动时随图表移动，不遮挡其他信息 */
   .tip-box .ft-date { font-size: 14px; font-weight: 600; margin-bottom: 6px; color: #222; }
   .tip-box .ft-row { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; }
   .tip-box .lbl { color: #888; }
@@ -1458,7 +1459,7 @@ function showPinTip(v) {
   if (!pin || pin.view !== v || !D || !n || pin.i == null) { tip.style.display = "none"; return; }
   const i = pin.i;
   tip.innerHTML = tipContentFor(v, i);
-  const zooming = document.getElementById("zoomOverlay").style.display !== "none";
+  const zooming = document.getElementById("zoomOverlay").style.display === "flex";
   const cvs = v === "future" ? fcv : cv;
   const rect = zooming ? document.getElementById("zoomCanvas").getBoundingClientRect() : cvs.getBoundingClientRect();
   let x;
@@ -1472,8 +1473,18 @@ function showPinTip(v) {
   const sx = rect.left + x * rect.width / W;
   let tx = sx + 14;
   if (tx + 260 > window.innerWidth) tx = sx - 270;
-  tip.style.left = tx + "px";
-  tip.style.top = (rect.top + 30) + "px";
+  if (zooming) {
+    // 放大模式：overlay 相对视口固定，浮窗用视口坐标
+    tip.style.position = "fixed";
+    tip.style.left = tx + "px";
+    tip.style.top = (rect.top + 30) + "px";
+  } else {
+    // 普通模式：固定窗口相对页面（文档坐标）定位——
+    // 页面滚动时随图表一起移动，不遮挡滚动上来的其他信息
+    tip.style.position = "absolute";
+    tip.style.left = (tx + window.scrollX) + "px";
+    tip.style.top = (rect.top + 30 + window.scrollY) + "px";
+  }
   tip.style.display = "block";
 }
 
