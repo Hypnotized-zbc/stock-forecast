@@ -870,13 +870,19 @@ def ai_insight(secid, name, recent):
                     headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
                     json={"model": LLM_MODEL,
                           "messages": [{"role": "user", "content": prompt}],
-                          "temperature": 0.6, "max_tokens": 400},
+                          "temperature": 0.6, "max_tokens": 600},  # 600 减少截断（断句）
                     timeout=20,
                 )
                 resp.raise_for_status()
-                text = resp.json()["choices"][0]["message"]["content"].strip()
+                data = resp.json()
+                choice = data["choices"][0]
+                text = choice["message"]["content"].strip()
+                finish = choice.get("finish_reason")
                 if not text:
                     raise ValueError("模型返回空内容，重试")  # DeepSeek 偶发空响应，走重试
+                if finish == "length":
+                    # 输出达到 max_tokens 上限被截断（断句），走重试拿完整结果
+                    raise ValueError("输出被截断，重试")
                 return {"text": text}
             except Exception as exc:
                 last_err = exc

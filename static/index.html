@@ -1718,17 +1718,23 @@ document.getElementById("chartPeriod").addEventListener("change", e => {
   setStatus("切换周期，重新下载数据...");
   doKlineSecid(secid, _curName, e.target.value);
 });
-// 发起 AI 解读：有缓存立即显示，无缓存请求并保存（带请求序号防串号）
-async function requestAiInsight() {
+// AI 标题（含"重新生成"按钮，点击强制重新请求覆盖缓存）
+function aiTitleHtml() {
+  return "<div class='ai-title' style='display:flex;align-items:center;gap:8px'>✨ AI 技术解读 · " + (_curName || "") +
+         "<button class='ai-regen' style='margin-left:auto;padding:2px 8px;border:1px solid #d1d5db;border-radius:5px;background:#fff;cursor:pointer;font-size:12px;color:#6b7280' title='重新生成解读（覆盖缓存）'>🔄 重新生成</button></div>";
+}
+
+// 发起 AI 解读：有缓存立即显示（force=true 时强制重新请求），无缓存请求并保存
+async function requestAiInsight(force) {
   const panel = document.getElementById("aiPanel");
   const secid = _curSecid;
   const ck = aiCacheKey();
   const myToken = ++_aiReqToken;
-  if (_aiCache[ck]) {
-    panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读 · " + (_curName || "") + "</div>" + _aiCache[ck];
+  if (!force && _aiCache[ck]) {
+    panel.innerHTML = aiTitleHtml() + _aiCache[ck];
     return;
   }
-  panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读 · " + (_curName || "") + "</div><div style='color:#9ca3af'>正在进行AI技术解读，大约需要5-10s…</div>";
+  panel.innerHTML = aiTitleHtml() + "<div style='color:#9ca3af'>正在进行AI技术解读，大约需要5-10s…</div>";
   const recent = [];
   const start = Math.max(0, n - 20);
   for (let i = start; i < n; i++) {
@@ -1743,24 +1749,29 @@ async function requestAiInsight() {
                              {signal: ctrl.signal});
     if (myToken !== _aiReqToken) return;  // 已切到其他股票，丢弃过期响应
     const data = await resp.json();
-    if (data.error) panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读</div><div style='color:#c0392b'>" + data.error + "</div>";
+    if (data.error) panel.innerHTML = aiTitleHtml() + "<div style='color:#c0392b'>" + data.error + "</div>";
     else {
       const t = (data.text || "").trim();
       if (!t) {
-        panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读</div><div style='color:#c0392b'>解读结果为空，请点击按钮重试</div>";
+        panel.innerHTML = aiTitleHtml() + "<div style='color:#c0392b'>解读结果为空，请点击 🔄 重新生成</div>";
         return;
       }
       _aiCache[ck] = t;  // 保存解读，之后查看不再重复请求
       saveAiCache();
-      panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读 · " + (_curName || "") + "</div>" + t.replace(/\n/g, "<br>");
+      panel.innerHTML = aiTitleHtml() + t.replace(/\n/g, "<br>");
     }
   } catch (e) {
     if (myToken !== _aiReqToken) return;
-    panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读</div><div style='color:#c0392b'>请求失败: " + e + "</div>";
+    panel.innerHTML = aiTitleHtml() + "<div style='color:#c0392b'>请求失败: " + e + "</div>";
   } finally {
     clearTimeout(timer);
   }
 }
+
+// AI 面板内"重新生成"按钮：强制重新请求并覆盖缓存（修复断句/不完整解读）
+document.getElementById("aiPanel").addEventListener("click", e => {
+  if (e.target.closest(".ai-regen")) requestAiInsight(true);
+});
 
 document.getElementById("aiBtn").addEventListener("click", () => {
   const panel = document.getElementById("aiPanel");
