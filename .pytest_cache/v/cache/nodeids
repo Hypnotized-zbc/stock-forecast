@@ -1,0 +1,10 @@
+[
+  "tests/test_backend.py::test_agg_period_week_and_month",
+  "tests/test_backend.py::test_boll_mid_equals_ma",
+  "tests/test_backend.py::test_build_chart_data_shape",
+  "tests/test_backend.py::test_ema_monotonic_bounds",
+  "tests/test_backend.py::test_kdj_bounds",
+  "tests/test_backend.py::test_ma_basic",
+  "tests/test_backend.py::test_macd_dif_is_ema_diff",
+  "tests/test_backend.py::test_rsi_range_and_extremes"
+]

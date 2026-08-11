@@ -1,719 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-crawler_stock.py — 股票历史数据查询 + 图表（单文件 Web 应用）
-===============================================================
-启动后自动打开浏览器页面：
-    页面上方"查询股票："输入框 → 输入名称/代码 → 选择候选 →
-    在同一个页面显示 K线/MA5/BOLL/成交量/涨跌幅 图表（下拉切换）。
-
-技术要点：
-- 本地 HTTP 服务（标准库 http.server，无第三方框架），绑定 127.0.0.1 随机端口
-- 页面与后端同源：浏览器 fetch /api/search、/api/kline，后端转发东财/新浪接口
-  （浏览器直连东财会被 CORS 拦，本地后端中转绕过）
-- 图表为原生 Canvas 绘制，单页面内完成查询与结果展示，不刷新跳转
-- 数据源：东方财富（主）+ 新浪（备用，东财断连自动切换）
-- 关闭浏览器页面即自动停止本地服务（页面卸载时 sendBeacon 通知）
-
-运行方式：
-    python3 crawler_stock.py
-    浏览器自动打开 http://127.0.0.1:<port>/
-
-依赖：requests（其余全用标准库 + 浏览器自带 Canvas）
-"""
-import csv
-import json
-import math
-import re
-import threading
-import time
-import urllib.parse
-from datetime import datetime, timedelta
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
-
-import requests
-
-# 东方财富接口（token 是公开固定值，官网页面也在用）
-SEARCH_API = "https://searchapi.eastmoney.com/api/suggest/get"
-KLINE_API = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
-PUBLIC_TOKEN = "D43BF722C8E33BDC906FB84D85E326E8"
-
-# K线字段（fields2 顺序固定）：
-# f51日期 f52开盘 f53收盘 f54最高 f55最低 f56成交量(手) f57成交额(元)
-# f58振幅 f59涨跌幅 f60涨跌额 f61换手率
-KLINE_FIELDS = ("f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61")
-CSV_COLUMNS = ["日期", "开盘", "收盘", "最高", "最低",
-               "成交量(手)", "成交额(元)", "振幅%", "涨跌幅%", "涨跌额", "换手率%"]
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-    "Referer": "https://quote.eastmoney.com/",
-}
-
-DATA_DIR = Path(__file__).resolve().parent / "data"
-
-# ---------------------------------------------------------------------------
-# 网络请求（带重试）
-# ---------------------------------------------------------------------------
-_SESSION = requests.Session()  # 复用连接，减少被远端断开的概率
-
-
-def get_json(url, params, retries=4):
-    """GET JSON，失败重试。
-
-    WSL 网络间歇抖动（东财接口偶发 RemoteDisconnected），重试 4 次、
-    指数退避；总等待控制在约 30 秒内，避免浏览器端等待过久。
-    """
-    last_err = None
-    for attempt in range(1, retries + 1):
-        try:
-            resp = _SESSION.get(url, params=params, headers=HEADERS, timeout=10)
-            resp.raise_for_status()
-            return resp.json()
-        except (requests.RequestException, ValueError) as exc:
-            last_err = exc
-            print(f"[!] 请求失败(第{attempt}/{retries}次): {exc}")
-            time.sleep(1.5 ** attempt)  # 指数退避：2s, 3s, 5s, 8s
-    raise ConnectionError(f"接口请求失败: {url} ({last_err})")
-
-
-# ---------------------------------------------------------------------------
-# 搜索与K线（数据层）
-# ---------------------------------------------------------------------------
-def search_stock(name):
-    """按名称/代码搜索，返回候选列表：[{名称, 代码, 市场, 分类, secid}, ...]"""
-    params = {"input": name, "type": "14", "token": PUBLIC_TOKEN}
-    data = get_json(SEARCH_API, params)
-    rows = (data.get("QuotationCodeTable") or {}).get("Data") or []
-    candidates = []
-    for r in rows:
-        secid = r.get("QuoteID") or ""
-        classify = r.get("Classify") or ""
-        if "Stock" not in classify and not r.get("SecurityTypeName"):
-            continue
-        candidates.append({
-            "名称": r.get("Name", ""),
-            "代码": r.get("Code", ""),
-            "市场": r.get("SecurityTypeName", ""),
-            "分类": classify,
-            "secid": secid,
-        })
-    seen, uniq = set(), []
-    for c in candidates:
-        if c["secid"] in seen:
-            continue
-        seen.add(c["secid"])
-        uniq.append(c)
-    return uniq
-
-
-def fetch_kline(secid, start, end):
-    """下载 [start, end] 区间日K，返回 (股票名, 行列表)。
-
-    优先东方财富；东财接口在 WSL 下偶发断连，失败时自动回退新浪备用源
-    （新浪仅支持 A股：secid 以 1./0. 开头；美股/港股保持东财重试）。
-    """
-    try:
-        return _fetch_kline_em(secid, start, end)
-    except ConnectionError as exc:
-        print(f"[i] 东财K线接口失败，尝试新浪备用源: {exc}")
-        return _fetch_kline_sina(secid, start, end)
-
-
-def _fetch_kline_em(secid, start, end):
-    """东方财富 K线。"""
-    params = {
-        "secid": secid,
-        "klt": "101",          # 101=日K
-        "fqt": "1",            # 前复权
-        "beg": start.strftime("%Y%m%d"),
-        "end": end.strftime("%Y%m%d"),
-        "fields1": "f1,f2,f3,f4,f5,f6",
-        "fields2": KLINE_FIELDS,
-    }
-    data = get_json(KLINE_API, params).get("data")
-    if not data or not data.get("klines"):
-        return None, []
-    name = data.get("name", "")
-    rows = [line.split(",") for line in data["klines"]]
-    return name, rows
-
-
-def _fetch_kline_sina(secid, start, end):
-    """新浪备用 K线（A股）。返回与东财相同结构的 11 字段行。
-
-    新浪字段少：成交额/换手率无数据置空；涨跌额/涨跌幅/振幅按收盘价推算。
-    成交量单位：新浪返回股数，统一换算为手（÷100）与东财一致。
-    """
-    if not secid.startswith(("1.", "0.")):
-        raise ConnectionError("新浪备用源仅支持A股，请稍后重试东财接口")
-
-    market = "sh" if secid.startswith("1.") else "sz"
-    code = secid.split(".")[1]
-    symbol = f"{market}{code}"
-    # 数据量随区间动态调整（接口上限约 1023 条），不足 300 条时取 300
-    days = (end - start).days
-    datalen = min(1023, max(300, days + 120))
-    url = ("https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
-           "CN_MarketData.getKLineData")
-    params = {"symbol": symbol, "scale": "240", "ma": "no", "datalen": str(datalen)}
-    data = get_json(url, params)
-    if not data:
-        return None, []
-
-    rows = []
-    prev_close = None
-    for item in data:
-        day = item["day"]
-        if not (start.strftime("%Y-%m-%d") <= day <= end.strftime("%Y-%m-%d")):
-            prev_close = float(item["close"])
-            continue  # 先扫描到区间起点，保留前收
-        op, hi, lo, cl = (float(item["open"]), float(item["high"]),
-                          float(item["low"]), float(item["close"]))
-        vol_hand = int(float(item["volume"]) / 100)          # 股 -> 手
-        change = "" if prev_close is None else round(cl - prev_close, 2)
-        change_pct = "" if prev_close is None else round((cl / prev_close - 1) * 100, 2)
-        amplitude = "" if prev_close is None else round((hi - lo) / prev_close * 100, 2)
-        rows.append([day,
-                     f"{op:.2f}", f"{cl:.2f}", f"{hi:.2f}", f"{lo:.2f}",
-                     str(vol_hand), "",                          # 成交额缺失
-                     str(amplitude), str(change_pct), str(change), ""])
-        prev_close = cl
-
-    name = _sina_stock_name(symbol)
-    return name, rows
-
-
-def _sina_stock_name(symbol):
-    """从新浪股票接口取名称（尽力而为，失败返回代码）。"""
-    try:
-        url = ("https://hq.sinajs.cn/list=" + symbol)
-        resp = _SESSION.get(url, headers={
-            "User-Agent": HEADERS["User-Agent"],
-            "Referer": "https://finance.sina.com.cn/",
-        }, timeout=10)
-        text = resp.text
-        # 格式: var hq_str_sh600519="贵州茅台,开盘,昨收,..."
-        if "=\"" in text:
-            name = text.split("=\"")[1].split(",")[0]
-            if name:
-                return name
-    except Exception:
-        pass
-    return symbol
-
-
-def ma(values, n):
-    """简单移动平均；前 n-1 个位置补 None。"""
-    out = [None] * len(values)
-    for i in range(n - 1, len(values)):
-        out[i] = round(sum(values[i - n + 1:i + 1]) / n, 3)
-    return out
-
-
-def boll(values, n=20, k=2.0):
-    """布林带：中轨 MA(n)，上下轨 = 中轨 ± k*标准差(总体)。"""
-    import statistics
-    mid, up, low = [None] * len(values), [None] * len(values), [None] * len(values)
-    for i in range(n - 1, len(values)):
-        window = values[i - n + 1:i + 1]
-        m = sum(window) / n
-        sd = statistics.pstdev(window)
-        mid[i] = round(m, 3)
-        up[i] = round(m + k * sd, 3)
-        low[i] = round(m - k * sd, 3)
-    return up, mid, low
-
-
-def build_chart_data(rows):
-    """把东财行数据转成图表 JSON 结构（含 MA5/MA20/BOLL 指标）。"""
-    closes = [float(r[2]) for r in rows]
-    return {
-        "dates": [r[0] for r in rows],
-        "opens": [float(r[1]) for r in rows],
-        "closes": closes,
-        "highs": [float(r[3]) for r in rows],
-        "lows": [float(r[4]) for r in rows],
-        "vols": [float(r[5]) for r in rows],
-        "changes": [float(r[8]) for r in rows],
-        "ma5": ma(closes, 5),
-        "ma20": ma(closes, 20),
-        "boll_up": boll(closes)[0],
-        "boll_mid": boll(closes)[1],
-        "boll_low": boll(closes)[2],
-    }
-
-
-def _cholesky_solve(A, b):
-    """Cholesky 求解对称正定方程组 A·x = b（纯 Python）。
-
-    A: 二维 list，b: list。返回 x: list。
-    """
-    n = len(A)
-    L = [[0.0] * n for _ in range(n)]
-    for i in range(n):
-        for j in range(i + 1):
-            s = A[i][j] - sum(L[i][k] * L[j][k] for k in range(j))
-            if i == j:
-                if s <= 1e-15:
-                    s = 1e-15
-                L[i][j] = s ** 0.5
-            else:
-                L[i][j] = s / L[j][j]
-    y = [0.0] * n
-    for i in range(n):
-        y[i] = (b[i] - sum(L[i][k] * y[k] for k in range(i))) / L[i][i]
-    x = [0.0] * n
-    for i in range(n - 1, -1, -1):
-        x[i] = (y[i] - sum(L[j][i] * x[j] for j in range(i + 1, n))) / L[i][i]
-    return x
-
-
-def _prophet_light(y, horizon):
-    """Prophet 轻量版：线性趋势 + 变点（分段斜率）+ 傅里叶周度季节。
-
-    核心思想同 Meta Prophet：y = trend(t) + season(t) + eps，
-    最小二乘一次性解出全部系数，预测 = 设计矩阵外推 × 系数。
-    """
-    n = len(y)
-    ts = list(range(n))
-    ncp = 3  # 变点数（数据前 80% 内等分）
-    cps = [int(0.2 * n + (0.6 * n) * (k + 1) / (ncp + 1)) for k in range(ncp)]
-
-    def design(t):
-        row = [1.0, float(t)]
-        row += [float(max(0, t - cp)) for cp in cps]
-        for k in (1, 2):  # 周度傅里叶（日频数据周季节最明显）
-            row.append(math.cos(2 * math.pi * k * t / 7.0))
-            row.append(math.sin(2 * math.pi * k * t / 7.0))
-        return row
-
-    X = [design(t) for t in ts]
-    p = len(X[0])
-    Xt = [[X[i][j] for i in range(n)] for j in range(p)]
-    A = [[sum(Xt[a][i] * X[i][b] for i in range(n)) for b in range(p)] for a in range(p)]
-    rhs = [sum(Xt[a][i] * y[i] for i in range(n)) for a in range(p)]
-    beta = _cholesky_solve(A, rhs)
-
-    fitted = [sum(beta[j] * X[i][j] for j in range(p)) for i in range(n)]
-    pred_ts = list(range(n, n + horizon))
-    Xp = [design(t) for t in pred_ts]
-    preds = [sum(beta[j] * Xp[i][j] for j in range(p)) for i in range(horizon)]
-    return fitted, preds
-
-
-def _svr_krr(y, horizon):
-    """SVR 轻量版：RBF 核岭回归（核方法，等价 ε-SVR 的平滑近似）。
-
-    K_ij = exp(-γ(t_i-t_j)²)，α = (K+λI)⁻¹y，
-    拟合 = K·α，预测 = 核外推·α。
-    """
-    n = len(y)
-    ts = [float(t) / max(1, n - 1) for t in range(n)]  # 归一化
-    sigma = 0.25
-    gamma = 1.0 / (2 * sigma * sigma)
-
-    K = [[math.exp(-gamma * (ts[i] - ts[j]) ** 2) for j in range(n)] for i in range(n)]
-    lam = 0.01
-    A = [[K[i][j] + (lam if i == j else 0.0) for j in range(n)] for i in range(n)]
-    alpha = _cholesky_solve(A, list(y))
-
-    fitted = [sum(K[i][j] * alpha[j] for j in range(n)) for i in range(n)]
-    p_ts = [float(t) / max(1, n - 1) for t in range(n, n + horizon)]
-    preds = []
-    for pt in p_ts:
-        k_row = [math.exp(-gamma * (pt - ts[j]) ** 2) for j in range(n)]
-        preds.append(sum(k_row[j] * alpha[j] for j in range(n)))
-    return fitted, preds
-
-
-def _rf_light(y, horizon, n_trees=30, max_depth=8, seed=7):
-    """随机森林轻量版：决策树回归 + bagging（手写，无 sklearn）。
-
-    特征：归一化时间 t ∈ [0,1]。单特征递归分裂（最小化 MSE），
-    每棵树用随机 60% 子样本训练；预测 = 树输出均值。
-    树无法外推：预测超出训练范围时取末端叶子均值（趋势趋平）。
-    """
-    import random
-    rng = random.Random(seed)
-    n = len(y)
-    ts = [float(t) / max(1, n - 1) for t in range(n)]
-
-    def build_tree(idx, depth):
-        # idx: 样本下标列表
-        if depth >= max_depth or len(idx) < 5:
-            return ("leaf", sum(y[i] for i in idx) / len(idx))
-        best = None
-        cand = sorted(set(ts[i] for i in idx))
-        if len(cand) < 2:
-            return ("leaf", sum(y[i] for i in idx) / len(idx))
-        for t0 in cand[:-1]:
-            left = [i for i in idx if ts[i] <= t0]
-            right = [i for i in idx if ts[i] > t0]
-            if not left or not right:
-                continue
-            ml = sum(y[i] for i in left) / len(left)
-            mr = sum(y[i] for i in right) / len(right)
-            loss = sum((y[i] - ml) ** 2 for i in left) + sum((y[i] - mr) ** 2 for i in right)
-            if best is None or loss < best[0]:
-                best = (loss, t0, left, right)
-        if best is None:
-            return ("leaf", sum(y[i] for i in idx) / len(idx))
-        _, t0, left, right = best
-        return ("node", t0, build_tree(left, depth + 1), build_tree(right, depth + 1))
-
-    def predict_tree(tree, t):
-        while tree[0] == "node":
-            tree = tree[2] if t <= tree[1] else tree[3]
-        return tree[1]
-
-    trees = []
-    for _ in range(n_trees):
-        sample = [i for i in range(n) if rng.random() < 0.6]
-        if len(sample) < 10:
-            sample = list(range(n))
-        trees.append(build_tree(sample, 0))
-
-    fitted = [sum(predict_tree(t, ts[i]) for t in trees) / n_trees for i in range(n)]
-    preds = [sum(predict_tree(t, float(x) / max(1, n - 1)) for t in trees) / n_trees
-             for x in range(n, n + horizon)]
-    return fitted, preds
-
-
-def _quote_eastmoney(secid):
-    """东财实时行情 + 基本面（最新价/涨跌幅/量额/PE/PB/市值/股本等）。"""
-    url = "https://push2.eastmoney.com/api/qt/stock/get"
-    params = {
-        "secid": secid, "invt": "2", "fltt": "2",
-        "fields": "f43,f47,f48,f57,f58,f60,f84,f85,f92,f162,f167,f170,f183",
-    }
-    data = get_json(url, params, retries=2)  # 行情类接口快速失败，尽早切换备用源
-    d = data.get("data") or {}
-    try:
-        price = float(d.get("f43"))
-    except (TypeError, ValueError):
-        return None
-    if not price or price <= 0:  # 无效行情返回 None，前端走备用源/不显示
-        return None
-    return {
-        "secid": secid,
-        "name": d.get("f58"),
-        "code": d.get("f57"),
-        "price": price,
-        "prev_close": d.get("f60"),
-        "change_pct": d.get("f170"),
-        "volume": d.get("f47"),
-        "amount": d.get("f48"),
-        "pe": d.get("f162"),        # PE(动)
-        "pb": d.get("f167"),        # PB
-        "mktcap": d.get("f183"),    # 总市值(元)
-        "total_shares": d.get("f84"),   # 总股本(股)
-        "float_shares": d.get("f85"),   # 流通股本(股)
-        "bps": d.get("f92"),        # 每股净资产
-    }
-
-
-def _quote_sina(secid):
-    """新浪实时行情备用源（仅价格/量额，无基本面；字段缺失置 None）。"""
-    prefix, code = secid.split(".")
-    sym = ("sh" if prefix == "1" else "sz") + code
-    url = f"https://hq.sinajs.cn/list={sym}"
-    resp = _SESSION.get(url, headers={**HEADERS,
-                                      "Referer": "https://finance.sina.com.cn"}, timeout=10)
-    resp.raise_for_status()
-    resp.encoding = "gbk"
-    m = re.search(r'="([^"]*)"', resp.text)
-    if not m:
-        return None
-    parts = m.group(1).split(",")
-    if len(parts) < 32:
-        return None
-    try:
-        prev = float(parts[2])
-        price = float(parts[3])
-    except (ValueError, IndexError):
-        return None
-    if not price or price <= 0:
-        return None
-    return {
-        "secid": secid,
-        "name": parts[0],
-        "code": code,
-        "price": price,
-        "prev_close": prev,
-        "change_pct": (price - prev) / prev * 100 if prev else 0.0,
-        "volume": float(parts[8]) if parts[8] else None,   # 股
-        "amount": float(parts[9]) if parts[9] else None,   # 元
-        "pe": None, "pb": None, "mktcap": None,
-        "total_shares": None, "float_shares": None, "bps": None,
-    }
-
-
-def fetch_quotes(secids):
-    """东财 ulist 批量实时行情（含 PE/PB/市值等基本面）；失败回退逐只新浪。"""
-    secids = [s.strip() for s in secids if s and s.strip()]
-    if not secids:
-        return []
-    try:
-        url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
-        params = {
-            "secids": ",".join(secids), "fltt": "2", "invt": "2",
-            "fields": "f2,f3,f5,f6,f9,f12,f13,f14,f18,f20,f21,f23",
-        }
-        data = get_json(url, params, retries=2)  # 行情类接口快速失败，尽早切换备用源
-        diff = (data.get("data") or {}).get("diff") or []
-        out = []
-        for it in diff:
-            try:
-                price = float(it.get("f2"))
-            except (TypeError, ValueError):
-                continue
-            if not price or price <= 0:  # 无效行情（停牌/接口返回0）不输出，避免前端显示 000
-                continue
-            out.append({
-                "secid": ("1." if it.get("f13") == 1 else "0.") + str(it.get("f12")),
-                "name": it.get("f14"),
-                "code": str(it.get("f12")),
-                "price": price,
-                "prev_close": it.get("f18"),
-                "change_pct": it.get("f3"),
-                "volume": it.get("f5"),
-                "amount": it.get("f6"),
-                "pe": it.get("f9"),          # PE(动)
-                "pb": it.get("f23"),         # PB
-                "mktcap": it.get("f20"),     # 总市值(元)
-                "float_mktcap": it.get("f21"),  # 流通市值(元)
-            })
-        if out:
-            return out
-    except Exception as exc:
-        print(f"[quotes] 东财批量失败: {exc}")
-    # 回退：逐只新浪（无基本面字段）
-    return [q for q in (fetch_quote(s) for s in secids) if q]
-
-
-def fetch_quote(secid):
-    """东财实时行情（主）→ 新浪（备）；双源都失败返回 None。"""
-    try:
-        q = _quote_eastmoney(secid)
-        if q:
-            return q
-    except Exception as exc:
-        print(f"[quote] 东财失败: {exc}")
-    try:
-        q = _quote_sina(secid)
-        if q:
-            return q
-        print("[quote] 新浪返回空")
-    except Exception as exc:
-        print(f"[quote] 新浪失败: {exc}")
-    return None
-
-
-def compute_fits(closes, dates=None, horizon=10):
-    """对收盘价序列做三种模型拟合（in-sample）+ 未来 horizon 日预测。
-
-    返回结构：
-        {"linear": {"name", "values": [...], "mae", "rmse", "r2"}, ...}
-        每个模型含 "predict": [horizon 个预测值], "predict_dates": [horizon 个日期]
-    纯 Python 实现，零第三方依赖（只需 requests），任何环境可跑：
-    - 线性回归：最小二乘直线（手写公式）
-    - ARIMA(1,1,0)：一阶差分 + AR(1) 系数最小二乘估计（数学上等价）
-    - ETS：Holt 线性趋势指数平滑（α/β 网格搜索最小化 SSE）
-    数据不足或异常时返回 None（前端提示不可用，不影响行情功能）。
-    """
-    # 过滤 None/非法值，并同步日期
-    raw = list(zip(closes, dates)) if dates and len(dates) == len(closes) \
-        else [(v, None) for v in closes]
-    pairs = []
-    for v, d in raw:
-        try:
-            f = float(v)
-        except (TypeError, ValueError):
-            continue
-        pairs.append((f, d))
-    y = [p[0] for p in pairs]
-    dates = [p[1] for p in pairs]
-    n = len(y)
-    if n < 10:
-        return None
-
-    # 未来 horizon 个预测日期：一律从今天起算（数据源滞后时避免出现过去日期）
-    try:
-        today = datetime.now()
-        pred_dates = [(today + timedelta(days=i + 1)).strftime("%Y-%m-%d")
-                      for i in range(horizon)]
-    except Exception:
-        pred_dates = [f"D+{i + 1}" for i in range(horizon)]
-
-    def _clean(vals):
-        """None/非数值 → None，其余保留 4 位小数（json.dumps 输出 NaN 非法 JSON）。"""
-        out = []
-        for v in vals:
-            try:
-                f = float(v)
-            except (TypeError, ValueError):
-                out.append(None)
-                continue
-            if math.isnan(f) or math.isinf(f):
-                out.append(None)
-            else:
-                out.append(round(f, 4))
-        return out
-
-    results = {}
-
-    # ---- 线性回归：y = a*t + b（最小二乘手写公式）----
-    try:
-        ts = list(range(n))
-        mt = sum(ts) / n
-        my = sum(y) / n
-        sxy = sum((t - mt) * (v - my) for t, v in zip(ts, y))
-        sxx = sum((t - mt) ** 2 for t in ts)
-        slope = sxy / sxx if sxx > 1e-12 else 0.0
-        intercept = my - slope * mt
-        results["linear"] = {"name": "线性回归",
-                             "values": _clean(slope * t + intercept for t in ts)}
-    except Exception:
-        pass
-
-    # ---- ARIMA(1,1,0)+drift：diff[t] = c + φ·diff[t-1] ----
-    # 股票日涨跌无自相关时 φ≈0，若无常数项预测会平线；
-    # 加漂移 c（平均日涨跌）让预测反映历史趋势斜率。
-    try:
-        diff = [y[i] - y[i - 1] for i in range(1, n)]
-        c = sum(diff) / len(diff)  # 漂移 = 平均日涨跌
-        d0 = diff[:-1]
-        d1 = diff[1:]
-        m0 = sum(d0) / len(d0)
-        m1 = sum(d1) / len(d1)
-        num = sum((a - m0) * (b - m1) for a, b in zip(d0, d1))
-        den = sum((a - m0) ** 2 for a in d0)
-        phi = num / den if den > 1e-12 else 0.0
-        phi = max(-0.99, min(0.99, phi))  # 保证平稳
-        fitted = [None] * n
-        for i in range(2, n):
-            fitted[i] = y[i - 1] + c + phi * (y[i - 1] - y[i - 2])
-        # 未来 horizon 日预测：带漂移的差分 AR(1) 递推外推
-        last, prev = y[-1], y[-2]
-        preds = []
-        for _ in range(horizon):
-            nxt = last + c + phi * (last - prev)
-            preds.append(nxt)
-            prev, last = last, nxt
-        results["arima"] = {"name": "ARIMA(1,1,0)+drift",
-                            "values": _clean(fitted),
-                            "predict": _clean(preds),
-                            "predict_dates": pred_dates}
-    except Exception:
-        pass
-
-    # ---- ETS：Holt 线性趋势指数平滑（α/β 网格搜索最小化 SSE）----
-    try:
-        def _holt(alpha, beta):
-            level = y[0]
-            trend = y[1] - y[0] if n > 1 else 0.0
-            out = [None] * n
-            out[0] = y[0]
-            for i in range(1, n):
-                out[i] = level + trend                     # 一步拟合
-                new_level = alpha * y[i] + (1 - alpha) * (level + trend)
-                new_trend = beta * (new_level - level) + (1 - beta) * trend
-                level, trend = new_level, new_trend
-            return out
-
-        best_a, best_b, best_sse, best_fit = 0.3, 0.1, float("inf"), None
-        alphas = [round(0.05 + 0.1 * i, 2) for i in range(10)]   # 0.05~0.95
-        betas = [round(0.01 + 0.05 * i, 2) for i in range(7)]    # 0.01~0.31
-        for alpha in alphas:
-            for beta in betas:
-                f = _holt(alpha, beta)
-                sse = sum((y[i] - f[i]) ** 2 for i in range(1, n))
-                if sse < best_sse:
-                    best_a, best_b, best_sse, best_fit = alpha, beta, sse, f
-        # 未来 horizon 日预测：用最优 α/β 递推至末尾状态，水平+趋势外推
-        level, trend = y[0], y[1] - y[0] if n > 1 else 0.0
-        for i in range(1, n):
-            new_level = best_a * y[i] + (1 - best_a) * (level + trend)
-            new_trend = best_b * (new_level - level) + (1 - best_b) * trend
-            level, trend = new_level, new_trend
-        preds = [level + (k + 1) * trend for k in range(horizon)]
-        results["ets"] = {"name": f"ETS 指数平滑(α={best_a:.2f})",
-                          "values": _clean(best_fit),
-                          "predict": _clean(preds),
-                          "predict_dates": pred_dates}
-    except Exception:
-        pass
-
-    # ---- Prophet 轻量版：趋势 + 变点 + 傅里叶季节 ----
-    try:
-        pf, pp = _prophet_light(y, horizon)
-        results["prophet"] = {"name": "Prophet(轻量)",
-                              "values": _clean(pf),
-                              "predict": _clean(pp),
-                              "predict_dates": pred_dates}
-    except Exception:
-        pass
-
-    # ---- SVR 轻量版：RBF 核岭回归 ----
-    try:
-        sf, sp = _svr_krr(y, horizon)
-        results["svr"] = {"name": "SVR(核岭回归)",
-                          "values": _clean(sf),
-                          "predict": _clean(sp),
-                          "predict_dates": pred_dates}
-    except Exception:
-        pass
-
-    # ---- 随机森林轻量版：决策树 bagging ----
-    try:
-        rf, rp = _rf_light(y, horizon)
-        results["rf"] = {"name": "随机森林(轻量)",
-                         "values": _clean(rf),
-                         "predict": _clean(rp),
-                         "predict_dates": pred_dates}
-    except Exception:
-        pass
-
-    if not results:
-        return None
-
-    # 误差指标：MAE / RMSE / R²（跳过 None 的前缀段）
-    y_mean = sum(y) / n
-    for key, r in results.items():
-        vals = r["values"]
-        idx = [i for i, v in enumerate(vals) if v is not None]
-        if len(idx) < 5:
-            continue
-        errs = [y[i] - vals[i] for i in idx]
-        mae = sum(abs(e) for e in errs) / len(errs)
-        rmse = (sum(e * e for e in errs) / len(errs)) ** 0.5
-        ss_res = sum(e * e for e in errs)
-        ss_tot = sum((y[i] - y_mean) ** 2 for i in idx)
-        r2 = 1 - ss_res / ss_tot if ss_tot > 1e-12 else 0.0
-        r["mae"] = round(mae, 4)
-        r["rmse"] = max(round(rmse, 4), 1e-9)  # 保底，避免 0 导致前端逆加权除零
-        r["r2"] = round(r2, 4)
-
-    return results
-
-
-def save_csv(rows):
-    """K线数据留档到 data/ 目录（每次查询自动保存一份）。"""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    path = DATA_DIR / f"kline_{datetime.now():%Y%m%d_%H%M%S}.csv"
-    with open(path, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.writer(f)
-        writer.writerow(CSV_COLUMNS)
-        writer.writerows(rows)
-    return path
-
-
-# ---------------------------------------------------------------------------
-# 页面模板（查询 + 结果，同一个 HTML）
-# ---------------------------------------------------------------------------
-INDEX_TEMPLATE = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -734,8 +18,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   .query-row button { padding: 8px 18px; font-size: 14px; border: none;
                border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; }
   .query-row button:hover { background: #1d4ed8; }
-  .query-row button:disabled { background: #9ca3af; cursor: not-allowed; }
-  .tabs { max-width: 1180px; margin: 0 auto 10px; }
+  .query-row button:disabled { background: #9ca3af; cursor: not-allowed; }  .tabs { max-width: 1180px; margin: 0 auto 10px; }
   .tab { padding: 7px 18px; font-size: 14px; border: 1px solid #d1d5db; background: #fff;
          border-radius: 6px 6px 0 0; cursor: pointer; margin-right: 4px; }
   .tab.active { background: #2563eb; color: #fff; border-color: #2563eb; }
@@ -772,6 +55,15 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
             box-shadow: 0 2px 8px rgba(0,0,0,.06); padding: 10px 14px; }
   .wl-head { font-size: 13px; color: #999; margin-bottom: 6px; }
   .wl-head-row { color: #999; font-size: 12px; cursor: default; padding-top: 4px; padding-bottom: 4px; }
+  .wl-mode { margin-left: auto; padding: 2px 10px; border: 1px solid #d1d5db; border-radius: 6px;
+             background: #fff; cursor: pointer; font-size: 12px; }
+  .heat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+               gap: 8px; margin-top: 10px; }
+  .heat-cell { border-radius: 8px; padding: 10px 8px; text-align: center; cursor: pointer;
+               color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.25); }
+  .heat-cell:hover { opacity: .85; }
+  .hc-name { font-size: 13px; font-weight: 600; }
+  .hc-chg { font-size: 12px; margin-top: 3px; }
   .wl-head-row:hover { background: transparent; }
   .wl-row { display: flex; align-items: center; gap: 14px; padding: 7px 4px;
             border-top: 1px solid #f0f0f0; cursor: pointer; font-size: 13px; }
@@ -801,6 +93,10 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
           box-shadow: 0 2px 8px rgba(0,0,0,.06); padding: 12px;
           display: flex; gap: 14px; align-items: flex-start; }
   .chart-col { flex: 1; min-width: 0; }
+  .ai-panel { max-width: 1180px; margin: 10px auto 0; background: #fff; border: 1px solid #e5e7eb;
+              border-radius: 10px; padding: 14px 16px; box-shadow: 0 1px 4px rgba(0,0,0,.06);
+              font-size: 14px; line-height: 1.9; color: #374151; }
+  .ai-panel .ai-title { font-weight: 600; color: #111827; margin-bottom: 6px; }
   canvas { display: block; cursor: crosshair; max-width: 100%; height: auto; }
   .legend { font-size: 12px; color: #666; margin-top: 6px; }
   .legend span { margin-right: 14px; }
@@ -815,6 +111,19 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   #zoomCanvas { max-width: calc(100vw - 60px); max-height: calc(100vh - 60px);
                 background: #fff; border-radius: 10px;
                 box-shadow: 0 10px 40px rgba(0,0,0,.5); }
+  #compareOverlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.62);
+                    z-index: 1000; align-items: center; justify-content: center; }
+  .cmp-box { background: #fff; border-radius: 12px; padding: 16px 20px;
+             max-width: 760px; width: 90%; max-height: 88vh; overflow: auto;
+             box-shadow: 0 10px 40px rgba(0,0,0,.5); }
+  .cmp-head { font-weight: 600; color: #111827; margin-bottom: 10px; font-size: 15px; }
+  .cmp-list { max-height: 220px; overflow: auto; border: 1px solid #e5e7eb;
+              border-radius: 8px; padding: 8px; }
+  .cmp-item { display: flex; align-items: center; gap: 8px; padding: 5px 6px;
+              font-size: 14px; cursor: pointer; border-radius: 6px; }
+  .cmp-item:hover { background: #f3f4f6; }
+  .cmp-item input { cursor: pointer; }
+  #compareCanvas { width: 100%; background: #fff; border-radius: 8px; margin-top: 10px; }
 </style>
 </head>
 <body>
@@ -847,9 +156,21 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
     <option value="boll">布林带 BOLL 图</option>
     <option value="vol">成交量 VOL 图</option>
     <option value="change">涨跌幅柱状图</option>
+    <option value="macd">MACD 指标</option>
+    <option value="kdj">KDJ 指标</option>
+    <option value="rsi">RSI 指标</option>
   </select>
+  <select id="chartPeriod">
+    <option value="day">日K</option>
+    <option value="week">周K</option>
+    <option value="month">月K</option>
+  </select>
+  <button id="aiBtn" style="margin-left:6px;padding:3px 12px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;font-size:13px">✨ AI 解读</button>
+  <button id="cmpBtn" style="margin-left:6px;padding:3px 12px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;font-size:13px">⇄ 多股对比</button>
+  <button id="shareBtn" style="margin-left:6px;padding:3px 12px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;font-size:13px">📋 分享卡片</button>
   <span class="sub" id="rangeInfo"></span>
 </div>
+<div id="aiPanel" class="ai-panel" style="display:none"></div>
 <div class="wrap">
   <div class="chart-col">
     <canvas id="chart"></canvas>
@@ -872,6 +193,17 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
 <div id="zoomOverlay">
   <button id="zoomClose" title="关闭放大">✕</button>
   <canvas id="zoomCanvas"></canvas>
+</div>
+<div id="compareOverlay">
+  <div class="cmp-box">
+    <div class="cmp-head">多股归一化对比（以各自首日收盘 = 100）</div>
+    <div class="cmp-list" id="cmpList"></div>
+    <div style="text-align:center;margin:8px 0">
+      <button id="cmpGo" style="padding:6px 18px;border:none;border-radius:6px;background:#2563eb;color:#fff;cursor:pointer">生成对比图</button>
+      <button id="cmpClose" style="padding:6px 18px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;margin-left:8px">关闭</button>
+    </div>
+    <canvas id="compareCanvas" style="display:none"></canvas>
+  </div>
 </div>
 <script>
 "use strict";
@@ -1053,6 +385,89 @@ function drawChange() {
     ctx.fillRect(xOf(i)-bw/2, y1, bw, h1);
   }
   legend("<span><i style='color:"+UP+"'>■</i> 上涨</span><span><i style='color:"+DOWN+"'>■</i> 下跌</span><span>单位：%</span>");
+}
+
+// 通用折线序列（key 为 D 上的数组字段，null 处断线）
+function drawLineSeries(key, mn, mx, color, width) {
+  ctx.strokeStyle = color; ctx.lineWidth = width || 1.4;
+  ctx.beginPath();
+  let started = false;
+  for (let i=0; i<n; i++) {
+    const v = D[key] ? D[key][i] : null;
+    if (v == null) { started = false; continue; }
+    const x = xOf(i), y = yOf(v, mn, mx);
+    if (started) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+    started = true;
+  }
+  ctx.stroke();
+}
+
+// ---- MACD（DIF/DEA/柱）----
+function drawMACD() {
+  const vals = [];
+  for (let i=0; i<n; i++) {
+    if (D.macd_dif && D.macd_dif[i] != null) vals.push(D.macd_dif[i]);
+    if (D.macd_dea && D.macd_dea[i] != null) vals.push(D.macd_dea[i]);
+    if (D.macd_hist && D.macd_hist[i] != null) vals.push(D.macd_hist[i]);
+  }
+  if (!vals.length) { drawEmpty("暂无 MACD 数据（请重新查询刷新缓存）"); return; }
+  const [mn, mx] = seriesMinMax(vals, 0.05);
+  const lo = Math.min(mn, 0), hi = Math.max(mx, 0);
+  drawAxes(lo, hi, 5);
+  const y0 = yOf(0, lo, hi);
+  ctx.strokeStyle = "#999"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(PAD.L, y0); ctx.lineTo(W-PAD.R, y0); ctx.stroke();
+  const [b0, b1] = zRange();
+  const bw = Math.max(1.2, (W-PAD.L-PAD.R)/(b1-b0+1)*0.5);
+  for (let i=0; i<n; i++) {
+    const h = D.macd_hist && D.macd_hist[i];
+    if (h == null) continue;
+    ctx.fillStyle = h >= 0 ? UP : DOWN;
+    const y = yOf(h, lo, hi);
+    const y1 = Math.min(y, y0), h1 = Math.max(1, Math.abs(y-y0));
+    ctx.fillRect(xOf(i)-bw/2, y1, bw, h1);
+  }
+  drawLineSeries("macd_dif", lo, hi, "#f59e0b", 1.4);
+  drawLineSeries("macd_dea", lo, hi, "#3b82f6", 1.4);
+  legend("<span><i style='color:#f59e0b'>■</i> DIF</span><span><i style='color:#3b82f6'>■</i> DEA</span><span><i style='color:#e03434'>■</i> 柱(2×差值)</span>");
+}
+
+// ---- KDJ（K/D/J）----
+function drawKDJ() {
+  const vals = [];
+  for (const k of ["kdj_k", "kdj_d", "kdj_j"]) {
+    if (D[k]) for (let i=0; i<n; i++) if (D[k][i] != null) vals.push(D[k][i]);
+  }
+  if (!vals.length) { drawEmpty("暂无 KDJ 数据（请重新查询刷新缓存）"); return; }
+  const [mn, mx] = seriesMinMax(vals, 0.05);
+  drawAxes(mn, mx, 5);
+  drawLineSeries("kdj_k", mn, mx, "#f59e0b", 1.4);
+  drawLineSeries("kdj_d", mn, mx, "#3b82f6", 1.4);
+  drawLineSeries("kdj_j", mn, mx, "#8b5cf6", 1.2);
+  legend("<span><i style='color:#f59e0b'>■</i> K</span><span><i style='color:#3b82f6'>■</i> D</span><span><i style='color:#8b5cf6'>■</i> J</span>");
+}
+
+// ---- RSI（0-100，30/70 参考线）----
+function drawRSI() {
+  const lo = 0, hi = 100;
+  drawAxes(lo, hi, 4);
+  ctx.strokeStyle = "#ddd"; ctx.lineWidth = 1;
+  for (const lv of [30, 70]) {
+    const y = yOf(lv, lo, hi);
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(PAD.L, y); ctx.lineTo(W-PAD.R, y); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  const has = D.rsi && D.rsi.some(v => v != null);
+  if (!has) { drawEmpty("暂无 RSI 数据（请重新查询刷新缓存）"); return; }
+  drawLineSeries("rsi", lo, hi, "#8b5cf6", 1.6);
+  legend("<span><i style='color:#8b5cf6'>■</i> RSI(14)</span><span>30 超卖 / 70 超买</span>");
+}
+
+function drawEmpty(msg) {
+  ctx.fillStyle = "#bbb"; ctx.font = "14px sans-serif"; ctx.textAlign = "center";
+  ctx.fillText(msg, W/2, H/2);
+  legend("");
 }
 
 // ---- 模型拟合图（真实收盘 + 5 个模型）----
@@ -1426,6 +841,10 @@ function paint(type) {
   else if (type=="ma5") drawMA5();
   else if (type=="boll") drawBOLL();
   else if (type=="vol") drawVol();
+  else if (type=="change") drawChange();
+  else if (type=="macd") drawMACD();
+  else if (type=="kdj") drawKDJ();
+  else if (type=="rsi") drawRSI();
   else drawChange();
   drawPinLine("chart");
 }
@@ -1475,6 +894,26 @@ function tipContentFor(view, i) {
   const ch = D.changes[i];
   const cls = ch>=0 ? 'up' : 'down';
   const row2 = (l, v) => "<div class='r'><span class='lbl'>"+l+"</span><span class='val'>"+v+"</span></div>";
+  if (currentType === "macd") {
+    const v = x => x != null ? x.toFixed(3) : "—";
+    return row2("日期", "<b>"+D.dates[i]+"</b>") +
+      row2("DIF", v(D.macd_dif && D.macd_dif[i])) +
+      row2("DEA", v(D.macd_dea && D.macd_dea[i])) +
+      row2("MACD柱", v(D.macd_hist && D.macd_hist[i]));
+  }
+  if (currentType === "kdj") {
+    const v = x => x != null ? x.toFixed(2) : "—";
+    return row2("日期", "<b>"+D.dates[i]+"</b>") +
+      row2("K", v(D.kdj_k && D.kdj_k[i])) +
+      row2("D", v(D.kdj_d && D.kdj_d[i])) +
+      row2("J", v(D.kdj_j && D.kdj_j[i]));
+  }
+  if (currentType === "rsi") {
+    const v = x != null ? x.toFixed(2) : "—";
+    return row2("日期", "<b>"+D.dates[i]+"</b>") +
+      row2("RSI(14)", v) +
+      row2("状态", D.rsi && D.rsi[i] != null ? (D.rsi[i] >= 70 ? "超买" : D.rsi[i] <= 30 ? "超卖" : "中性") : "—");
+  }
   return row2("日期", "<b>"+D.dates[i]+"</b>") +
     row2("开盘", fmt(D.opens[i])) +
     row2("收盘", fmt(D.closes[i])) +
@@ -1685,6 +1124,24 @@ function zoomYRange() {
     return seriesMinMax(vals, 0.05);
   }
   if (currentType === "vol") return seriesMinMax(D.vols, 0.05);
+  if (currentType === "macd") {
+    const vals = [];
+    for (let i=0; i<n; i++) {
+      if (D.macd_dif && D.macd_dif[i] != null) vals.push(D.macd_dif[i]);
+      if (D.macd_dea && D.macd_dea[i] != null) vals.push(D.macd_dea[i]);
+      if (D.macd_hist && D.macd_hist[i] != null) vals.push(D.macd_hist[i]);
+    }
+    const [mn, mx] = seriesMinMax(vals, 0.05);
+    return [Math.min(mn, 0), Math.max(mx, 0)];
+  }
+  if (currentType === "kdj") {
+    const vals = [];
+    for (const k of ["kdj_k", "kdj_d", "kdj_j"]) {
+      if (D[k]) for (let i=0; i<n; i++) if (D[k][i] != null) vals.push(D[k][i]);
+    }
+    return seriesMinMax(vals, 0.05);
+  }
+  if (currentType === "rsi") return [0, 100];
   const [mn, mx] = seriesMinMax(D.changes, 0.15);
   return [Math.min(mn, 0), Math.max(mx, 0)];
 }
@@ -1941,8 +1398,11 @@ async function doSearch() {
 
 // ---- 实时行情 / 自选股 ----
 let _curSecid = null;
+let _curName = "";
 let _quoteTimer = null;
 let _watchQuotes = {};
+let _lastQuoteTs = null;  // 最近一次实时行情刷新时间（时间戳显示）
+let _wlMode = "list";     // 自选股显示模式：list=列表 / grid=热力图
 let _watch = [];
 try { _watch = JSON.parse(localStorage.getItem("wl") || "[]"); } catch (e) { _watch = []; }
 
@@ -1964,7 +1424,10 @@ async function refreshAllQuotes() {
     const map = {};
     for (const q of list) if (q && q.price != null) map[q.secid] = q;
     _watchQuotes = map;
+    _lastQuoteTs = Date.now();
     renderWatchQuotes(map);
+    const head = document.querySelector("#watchlist .wl-head");
+    if (head) head.textContent = "自选股实时行情 · 更新于 " + fmtTime(_lastQuoteTs);
   } catch (e) {
     setStatus("实时行情获取失败，30 秒后自动重试");
   }
@@ -1979,6 +1442,7 @@ function setChartData(data, name, secid) {
   D = data;
   n = D.dates.length;
   _curSecid = secid;
+  _curName = data.name || name || "";
   // 当前查询股票醒目标题：名称 + 代码 + 涨跌幅（红涨绿跌）
   // 涨跌幅不单独抓取——直接从自选股列表数据行同步（syncTitleFromWatch），
   // 自选行有值标题就有，自选行无数据标题显示 —，两处永远一致
@@ -2004,6 +1468,12 @@ function setChartData(data, name, secid) {
   startQuoteTimer();
 }
 
+function fmtTime(ts) {
+  const d = new Date(ts);
+  const p = x => String(x).padStart(2, "0");
+  return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+}
+
 function saveWatch() { try { localStorage.setItem("wl", JSON.stringify(_watch)); } catch (e) {} }
 
 // 当前股标题涨跌幅直接从自选股列表数据行同步（不单独抓取当前股）：
@@ -2026,7 +1496,8 @@ function syncTitleFromWatch() {
 function renderWatchlist() {
   const bar = document.getElementById("watchlist");
   if (!_watch.length) { bar.innerHTML = "<div class='wl-empty'>自选股（查询候选旁点 ＋ 添加）</div>"; return; }
-  bar.innerHTML = "<div class='wl-head'>自选股实时行情（每30秒统一刷新）</div>" +
+  bar.innerHTML = "<div class='wl-head' style='display:flex;align-items:center;gap:8px'><span>自选股实时行情 · " + (_lastQuoteTs ? "更新于 " + fmtTime(_lastQuoteTs) : "每30秒统一刷新") + "</span>" +
+    "<button id='wlModeBtn' class='wl-mode'>" + (_wlMode === "grid" ? "☰ 列表" : "▦ 热力图") + "</button></div>" +
     "<div class='wl-row wl-head-row'>" +
       "<span class='wl-name'>名称</span>" +
       "<span class='wl-price'>最新价</span>" +
@@ -2050,6 +1521,28 @@ function renderWatchlist() {
   renderWatchQuotes(_watchQuotes);
 }
 function renderWatchQuotes(map) {
+  // 热力图模式：按涨跌幅着色的网格（红涨绿跌，颜色深度随幅度）
+  if (_wlMode === "grid") {
+    let html = "";
+    for (const w of _watch) {
+      const q = map[w.secid];
+      const pct = q && q.change_pct != null ? q.change_pct : null;
+      const bg = pct == null ? "#9ca3af"
+        : pct >= 0 ? "rgba(224,52,52," + Math.min(0.92, 0.28 + Math.abs(pct) / 12) + ")"
+        : "rgba(8,153,129," + Math.min(0.92, 0.28 + Math.abs(pct) / 12) + ")";
+      html += "<div class='heat-cell' data-secid='" + w.secid + "' style='background:" + bg + "'>" +
+              "<div class='hc-name'>" + w.name + "</div>" +
+              "<div class='hc-chg'>" + (pct != null ? (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%" : "—") + "</div></div>";
+    }
+    const old = document.querySelector("#watchlist .heat-grid");
+    if (old) old.remove();
+    const wrap = document.createElement("div");
+    wrap.className = "heat-grid";
+    wrap.innerHTML = html;
+    document.getElementById("watchlist").appendChild(wrap);
+    syncTitleFromWatch();
+    return;
+  }
   for (const row of document.querySelectorAll(".wl-row")) {
     const q = map[row.dataset.secid];
     // 无效行情（无数据/价格为0）不渲染，保持"正在查询数据"，避免显示 000
@@ -2085,26 +1578,26 @@ function removeWatch(secid) {
 }
 
 // ---- K线缓存：已下载过的股票（含自选股）当日不再重复下载 ----
-function cacheKey(secid) {
+function cacheKey(secid, period) {
   const s = document.getElementById("startDate").value;
   const e = document.getElementById("endDate").value;
-  return "kline_" + secid + "_" + s + "_" + e;
+  return "kline_" + secid + "_" + (period || "day") + "_" + s + "_" + e;
 }
-function getKlineCache(secid) {
+function getKlineCache(secid, period) {
   try {
-    const raw = localStorage.getItem(cacheKey(secid));
+    const raw = localStorage.getItem(cacheKey(secid, period));
     if (!raw) return null;
     const o = JSON.parse(raw);
     if (!o.ts || Date.now() - o.ts > 24*3600*1000) {
-      localStorage.removeItem(cacheKey(secid));
+      localStorage.removeItem(cacheKey(secid, period));
       return null;
     }
     return o.data;
   } catch (e) { return null; }
 }
-function setKlineCache(secid, data) {
+function setKlineCache(secid, data, period) {
   try {
-    localStorage.setItem(cacheKey(secid), JSON.stringify({ts: Date.now(), data: data}));
+    localStorage.setItem(cacheKey(secid, period), JSON.stringify({ts: Date.now(), data: data}));
     // 清理：kline_ 缓存超过 20 个时删最旧一半
     const keys = Object.keys(localStorage).filter(k => k.startsWith("kline_"));
     if (keys.length > 20) {
@@ -2117,7 +1610,8 @@ function setKlineCache(secid, data) {
 
 async function doKline(idx) {
   const c = window._cands[idx];
-  const cached = getKlineCache(c.secid);
+  const period = document.getElementById("chartPeriod").value || "day";
+  const cached = getKlineCache(c.secid, period);
   if (cached) {
     setChartData(cached, c["名称"], c.secid);
     setStatus("已用今日缓存数据（无需重新下载）");
@@ -2130,10 +1624,10 @@ async function doKline(idx) {
   const timer = setTimeout(() => ctrl.abort(), 90000);
   try {
     const resp = await fetch("/api/kline?secid=" + encodeURIComponent(c.secid) +
-                             "&start=" + s + "&end=" + e, {signal: ctrl.signal});
+                             "&start=" + s + "&end=" + e + "&period=" + period, {signal: ctrl.signal});
     const data = await resp.json();
     if (data.error) { setStatus("下载失败: " + data.error); return; }
-    setKlineCache(c.secid, data);
+    setKlineCache(c.secid, data, period);
     setChartData(data, c["名称"], c.secid);
   } catch (err) {
     setStatus("请求异常或超时: " + err);
@@ -2143,8 +1637,9 @@ async function doKline(idx) {
 }
 
 // 自选股直接打开（跳过搜索；命中缓存不重新下载）
-async function doKlineSecid(secid, name) {
-  const cached = getKlineCache(secid);
+async function doKlineSecid(secid, name, period) {
+  period = period || document.getElementById("chartPeriod").value || "day";
+  const cached = getKlineCache(secid, period);
   if (cached) {
     setChartData(cached, name, secid);
     setStatus("已用今日缓存数据（无需重新下载）");
@@ -2157,10 +1652,10 @@ async function doKlineSecid(secid, name) {
   const timer = setTimeout(() => ctrl.abort(), 90000);
   try {
     const resp = await fetch("/api/kline?secid=" + encodeURIComponent(secid) +
-                             "&start=" + s + "&end=" + e, {signal: ctrl.signal});
+                             "&start=" + s + "&end=" + e + "&period=" + period, {signal: ctrl.signal});
     const data = await resp.json();
     if (data.error) { setStatus("下载失败: " + data.error); return; }
-    setKlineCache(secid, data);
+    setKlineCache(secid, data, period);
     setChartData(data, name, secid);
   } catch (err) {
     setStatus("请求异常或超时: " + err);
@@ -2180,21 +1675,199 @@ document.getElementById("candidateBox").addEventListener("click", e => {
   if (b) doKline(Number(b.dataset.i));
 });
 document.getElementById("watchlist").addEventListener("click", e => {
+  const modeBtn = e.target.closest("#wlModeBtn");
+  if (modeBtn) {
+    _wlMode = _wlMode === "grid" ? "list" : "grid";
+    renderWatchlist();
+    renderWatchQuotes(_watchQuotes);
+    return;
+  }
   const rm = e.target.closest(".wl-x");
   if (rm && rm.dataset.rm) { removeWatch(rm.dataset.rm); return; }
-  const row = e.target.closest(".wl-row");
+  const row = e.target.closest(".wl-row, .heat-cell");
   if (row) {
     const w = _watch.find(x => x.secid === row.dataset.secid);
     if (w) doKlineSecid(w.secid, w.name);
   }
 });
-document.getElementById("searchBtn").addEventListener("click", doSearch);
-document.getElementById("stockInput").addEventListener("keydown", e => {
+document.getElementById("searchBtn").addEventListener("click", doSearch);document.getElementById("stockInput").addEventListener("keydown", e => {
   if (e.key === "Enter") doSearch();
 });
 document.getElementById("chartType").addEventListener("change", e => {
   currentType = e.target.value;
   paint(currentType);
+});
+document.getElementById("chartPeriod").addEventListener("change", e => {
+  const secid = _curSecid;
+  if (!secid) return;
+  if (ZOOM) exitZoom();
+  setStatus("切换周期，重新下载数据...");
+  doKlineSecid(secid, _curName, e.target.value);
+});
+document.getElementById("aiBtn").addEventListener("click", async () => {
+  if (!D || !n) { setStatus("请先查询股票再使用 AI 解读"); return; }
+  const panel = document.getElementById("aiPanel");
+  panel.style.display = "block";
+  panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读 · " + (_curName || "") + "</div><div style='color:#9ca3af'>正在请求 DeepSeek，约 5~15 秒…</div>";
+  const recent = [];
+  const start = Math.max(0, n - 20);
+  for (let i = start; i < n; i++) {
+    recent.push({d: D.dates[i], o: D.opens[i], c: D.closes[i], h: D.highs[i], l: D.lows[i], ch: D.changes[i]});
+  }
+  try {
+    const resp = await fetch("/api/insight?secid=" + encodeURIComponent(_curSecid || "") +
+                             "&name=" + encodeURIComponent(_curName || "") +
+                             "&recent=" + encodeURIComponent(JSON.stringify(recent)));
+    const data = await resp.json();
+    if (data.error) panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读</div><div style='color:#c0392b'>" + data.error + "</div>";
+    else panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读 · " + (_curName || "") + "</div>" + data.text.replace(/\n/g, "<br>");
+  } catch (e) {
+    panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读</div><div style='color:#c0392b'>请求失败: " + e + "</div>";
+  }
+});
+// ---- 多股归一化对比 ----
+const CMP_COLORS = ["#2563eb", "#dc2626", "#16a34a", "#f59e0b", "#8b5cf6", "#06b6d4", "#e11d48", "#7c3aed"];
+
+function cmpCandidates() {
+  const list = [];
+  if (_curSecid) list.push({secid: _curSecid, name: _curName || "当前股票"});
+  for (const w of _watch) {
+    if (!w || !w.secid) continue;
+    if (!list.some(x => x.secid === w.secid)) list.push({secid: w.secid, name: w.name});
+  }
+  return list;
+}
+
+function cmpDataOf(secid) {
+  // 优先当前 D，否则从 localStorage 的日K缓存读取
+  if (_curSecid === secid && D && n) return D;
+  try {
+    const keys = Object.keys(localStorage).filter(k => k.startsWith("kline_" + secid + "_day_"));
+    if (!keys.length) return null;
+    const o = JSON.parse(localStorage.getItem(keys[0]));
+    if (!o.ts || Date.now() - o.ts > 24 * 3600 * 1000) return null;
+    return o.data;
+  } catch (e) { return null; }
+}
+
+function drawCompare() {
+  const sel = [...document.querySelectorAll("#cmpList input:checked")].map(i => i.value);
+  if (!sel.length) { setStatus("请至少选择一支股票"); return; }
+  const items = sel.map(secid => {
+    const d = cmpDataOf(secid);
+    if (!d || !d.closes || !d.closes.length) return null;
+    const start = Math.max(0, d.closes.length - 30);
+    return {name: d.name || secid, closes: d.closes.slice(start), dates: d.dates.slice(start)};
+  }).filter(Boolean);
+  if (items.length < 2) { setStatus("对比需要至少 2 支已下载数据的股票（先查询或加入自选股）"); return; }
+  const cv = document.getElementById("compareCanvas");
+  cv.style.display = "block";
+  const W2 = cv.parentElement.clientWidth - 40;
+  const H2 = Math.max(300, W2 * 0.55);
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(W2 * dpr);
+  cv.height = Math.round(H2 * dpr);
+  cv.style.width = W2 + "px";
+  cv.style.height = H2 + "px";
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W2, H2);
+  const padL = 56, padR = 16, padT = 14, padB = 30;
+  const plotW = W2 - padL - padR, plotH = H2 - padT - padB;
+  // 归一化：以各自首日收盘 = 100
+  const series = items.map(it => {
+    const base = it.closes[0] || 1;
+    return {name: it.name, vals: it.closes.map(c => c / base * 100)};
+  });
+  let lo = 100, hi = 100;
+  for (const s of series) for (const v of s.vals) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  const pad = (hi - lo) * 0.08 || 1;
+  lo -= pad; hi += pad;
+  const yOf = v => padT + (hi - v) * plotH / (hi - lo);
+  const xOf = i => padL + i * plotW / Math.max(1, series[0].vals.length - 1);
+  // 网格 + y 轴
+  ctx.strokeStyle = "#f0f0f0"; ctx.fillStyle = "#888"; ctx.font = "12px sans-serif";
+  for (let t = 0; t <= 4; t++) {
+    const v = lo + (hi - lo) * t / 4;
+    const y = yOf(v);
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W2 - padR, y); ctx.stroke();
+    ctx.textAlign = "right"; ctx.fillText(v.toFixed(1), padL - 8, y + 4);
+  }
+  // 基线 100
+  const y100 = yOf(100);
+  ctx.strokeStyle = "#bbb"; ctx.setLineDash([4, 4]);
+  ctx.beginPath(); ctx.moveTo(padL, y100); ctx.lineTo(W2 - padR, y100); ctx.stroke();
+  ctx.setLineDash([]);
+  // 曲线 + 末端标签
+  series.forEach((s, k) => {
+    const col = CMP_COLORS[k % CMP_COLORS.length];
+    ctx.strokeStyle = col; ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    s.vals.forEach((v, i) => {
+      const x = xOf(i), y = yOf(v);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    const lastX = xOf(s.vals.length - 1), lastY = yOf(s.vals[s.vals.length - 1]);
+    ctx.fillStyle = col; ctx.font = "12px sans-serif"; ctx.textAlign = "left";
+    ctx.fillText(s.name + " " + (s.vals[s.vals.length - 1] - 100).toFixed(1) + "%",
+                 Math.min(lastX + 6, W2 - padR - 130), lastY + 4);
+  });
+  // x 轴首尾日期
+  const dts = items[0].dates;
+  ctx.fillStyle = "#888"; ctx.textAlign = "center";
+  ctx.fillText(dts[0] || "", padL, H2 - 10);
+  ctx.fillText(dts[dts.length - 1] || "", W2 - padR, H2 - 10);
+}
+
+document.getElementById("cmpBtn").addEventListener("click", () => {
+  const list = cmpCandidates();
+  if (!list.length) { setStatus("暂无可对比的股票（先查询或加入自选股）"); return; }
+  const box = document.getElementById("cmpList");
+  box.innerHTML = list.map((c, i) =>
+    "<label class='cmp-item'><input type='checkbox' value='" + c.secid + "' " + (i < 2 ? "checked" : "") + ">" +
+    c.name + " <span style='color:#999'>" + c.secid + "</span></label>"
+  ).join("");
+  document.getElementById("compareOverlay").style.display = "flex";
+  document.getElementById("compareCanvas").style.display = "none";
+});
+document.getElementById("cmpGo").addEventListener("click", drawCompare);
+document.getElementById("cmpClose").addEventListener("click", () => {
+  document.getElementById("compareOverlay").style.display = "none";
+});
+// ---- 行情卡片分享 ----
+document.getElementById("shareBtn").addEventListener("click", () => {
+  if (!D || !n) { setStatus("请先查询股票再分享卡片"); return; }
+  const last = n - 1;
+  let img;
+  try { img = cv.toDataURL("image/png"); } catch (e) { setStatus("图表截图失败: " + e); return; }
+  const v = x => x != null ? fmt(x) : "—";
+  const rows = [
+    ["最新收盘", v(D.closes[last])],
+    ["涨跌幅", (D.changes[last] != null ? fmt(D.changes[last]) : "—") + "%"],
+    ["MA5", v(D.ma5 && D.ma5[last])],
+    ["MA20", v(D.ma20 && D.ma20[last])],
+    ["RSI(14)", D.rsi && D.rsi[last] != null ? D.rsi[last].toFixed(2) : "—"],
+    ["DIF / DEA", (D.macd_dif && D.macd_dif[last] != null ? D.macd_dif[last].toFixed(3) : "—") + " / " +
+                  (D.macd_dea && D.macd_dea[last] != null ? D.macd_dea[last].toFixed(3) : "—")],
+  ];
+  const w = window.open("", "_blank", "width=560,height=780");
+  if (!w) { setStatus("浏览器阻止了弹窗，请允许本站弹出窗口"); return; }
+  w.document.write(
+    "<html><head><meta charset='utf-8'><title>行情卡片 " + _curName + "</title>" +
+    "<style>body{font-family:'Microsoft YaHei',sans-serif;margin:20px;background:#f7f8fa}" +
+    ".card{max-width:520px;margin:auto;background:#fff;border-radius:12px;padding:18px;box-shadow:0 2px 12px rgba(0,0,0,.1)}" +
+    "h2{margin:0 0 4px;font-size:20px}.sub{color:#888;font-size:13px;margin-bottom:12px}" +
+    "table{width:100%;border-collapse:collapse;font-size:14px;margin-top:12px}" +
+    "td{padding:6px 8px;border-bottom:1px solid #f0f0f0}td:last-child{text-align:right;font-weight:600}" +
+    "img{width:100%;border-radius:8px;margin-top:12px}" +
+    ".foot{color:#aaa;font-size:11px;text-align:center;margin-top:14px}</style></head><body>" +
+    "<div class='card'><h2>" + _curName + " <span style='font-size:13px;color:#888'>" + (_curSecid || "") + "</span></h2>" +
+    "<div class='sub'>" + D.dates[0] + " ~ " + D.dates[last] + " · " + n + " 个交易日 · " + fmtTime(Date.now()) + "</div>" +
+    "<img src='" + img + "'>" +
+    "<table>" + rows.map(r => "<tr><td>" + r[0] + "</td><td>" + r[1] + "</td></tr>").join("") + "</table>" +
+    "<div class='foot'>由 stock-forecast 生成 · 仅供学习研究，不构成投资建议</div></div></body></html>");
+  w.document.close();
 });
 // 关闭/离开页面立即停止本地服务（sendBeacon 在页面卸载时可靠发送）
 window.addEventListener("pagehide", () => {
@@ -2216,157 +1889,3 @@ window.addEventListener("pagehide", () => {
 </script>
 </body>
 </html>
-"""
-
-
-# ---------------------------------------------------------------------------
-# 本地 HTTP 服务
-# ---------------------------------------------------------------------------
-_pending_shutdown_ts = None  # 页面关闭标记：30 秒内无新请求才退出（防刷新/拖拽误杀）
-
-
-def _cancel_pending_shutdown():
-    global _pending_shutdown_ts
-    _pending_shutdown_ts = None
-
-
-class Handler(BaseHTTPRequestHandler):
-    """查询页 + JSON API。浏览器与后端同源，后端中转东财/新浪。"""
-
-    def log_message(self, fmt, *args):  # 静默访问日志
-        pass
-
-    def _send(self, code, content_type, body):
-        self.send_response(code)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        try:
-            self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError, OSError):
-            pass  # 客户端提前断开（如刷新/关页），静默忽略
-
-    def _send_json(self, obj, code=200):
-        self._send(code, "application/json; charset=utf-8",
-                   json.dumps(obj, ensure_ascii=False).encode("utf-8"))
-
-    def _send_html(self, text):
-        self._send(200, "text/html; charset=utf-8", text.encode("utf-8"))
-
-    def do_GET(self):
-        _cancel_pending_shutdown()  # 任何请求都说明页面仍在用，取消待执行退出
-        parsed = urllib.parse.urlparse(self.path)
-        path = parsed.path
-        params = urllib.parse.parse_qs(parsed.query)
-
-        try:
-            if path == "/":
-                self._send_html(INDEX_TEMPLATE)
-            elif path == "/api/search":
-                q = (params.get("q") or [""])[0].strip()
-                if not q:
-                    self._send_json({"error": "缺少参数 q"}, 400)
-                    return
-                self._send_json(search_stock(q))
-            elif path == "/api/kline":
-                secid = (params.get("secid") or [""])[0].strip()
-                start = (params.get("start") or [""])[0].strip()
-                end = (params.get("end") or [""])[0].strip()
-                if not secid or not start or not end:
-                    self._send_json({"error": "缺少参数 secid/start/end"}, 400)
-                    return
-                try:
-                    s = datetime.strptime(start, "%Y-%m-%d")
-                    e = datetime.strptime(end, "%Y-%m-%d")
-                except ValueError:
-                    self._send_json({"error": "日期格式错误，应为 YYYY-MM-DD"}, 400)
-                    return
-                name, rows = fetch_kline(secid, s, e)
-                if not rows:
-                    self._send_json({"error": "未获取到K线数据"}, 404)
-                    return
-                data = build_chart_data(rows)
-                data["name"] = name
-                # 三种模型拟合 + 未来10日预测（纯 Python，零第三方依赖）
-                data["fit"] = compute_fits([float(r[2]) for r in rows],
-                                           [r[0] for r in rows])
-                try:
-                    save_csv(rows)  # 留档，失败不影响响应
-                except Exception:
-                    pass
-                self._send_json(data)
-            elif path == "/api/quotes":
-                secids = (params.get("secids") or [""])[0].split(",")
-                if not secids or not secids[0]:
-                    self._send_json({"error": "缺少 secids 参数"}, 400)
-                    return
-                self._send_json(fetch_quotes(secids))
-            elif path == "/api/quote":
-                secid = (params.get("secid") or [""])[0].strip()
-                if not secid:
-                    self._send_json({"error": "缺少 secid 参数"}, 400)
-                    return
-                q = fetch_quote(secid)
-                if not q:
-                    self._send_json({"error": "未获取到实时行情"}, 404)
-                    return
-                self._send_json(q)
-            elif path == "/api/shutdown":
-                global _pending_shutdown_ts
-                _pending_shutdown_ts = time.time()  # 标记关闭，30 秒内无新请求才退出
-                self._send_json({"ok": True})
-            else:
-                self._send_json({"error": "404 Not Found"}, 404)
-        except ConnectionError as exc:
-            self._send_json({"error": f"数据源请求失败: {exc}"}, 502)
-        except Exception as exc:
-            self._send_json({"error": f"服务器错误: {exc}"}, 500)
-
-    def do_POST(self):
-        """支持页面卸载时 sendBeacon 发来的停止请求（关闭网页即停止服务）。"""
-        _cancel_pending_shutdown()
-        path = urllib.parse.urlparse(self.path).path
-        if path == "/api/shutdown":
-            global _pending_shutdown_ts
-            _pending_shutdown_ts = time.time()  # 标记关闭，30 秒内无新请求才退出
-            self._send_json({"ok": True})
-        else:
-            self._send_json({"error": "404 Not Found"}, 404)
-
-
-def open_browser(url):
-    """用 Windows 默认浏览器打开本地地址。"""
-    try:
-        import subprocess
-        subprocess.Popen(["explorer.exe", url])
-    except Exception as exc:
-        print(f"[!] 自动打开浏览器失败，请手动访问: {url} ({exc})")
-
-
-def main():
-    print("=" * 56)
-    print("股票历史数据查询（浏览器界面 · 东方财富/新浪数据源）")
-    print("=" * 56)
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    server.daemon_threads = True  # 请求线程守护化，客户端断开不拖垮进程
-    port = server.server_address[1]
-    url = f"http://127.0.0.1:{port}/"
-    print(f"[i] 服务已启动: {url}")
-    print(f"[i] 浏览器已自动打开，页面上方输入股票名称查询")
-    print(f"[i] 关闭浏览器页面 30 秒后自动停止服务（刷新/切走不误停）")
-    open_browser(url)
-    try:
-        server.timeout = 1
-        while True:
-            server.handle_request()
-            if _pending_shutdown_ts and time.time() - _pending_shutdown_ts > 30:
-                print("[i] 页面已关闭，服务自动停止（30 秒无访问）")
-                break
-    except KeyboardInterrupt:
-        print("\n[i] 服务已停止")
-
-
-if __name__ == "__main__":
-    main()
