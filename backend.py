@@ -575,6 +575,27 @@ def _quote_sina(secid):
     }
 
 
+def _fill_fundamentals(q):
+    """基本面字段（PE/PB/市值）缺失时补齐：先东财单股、再腾讯接口。
+
+    保险机制：东财批量成功但个别字段缺失（数据源偶发缺字段）同样执行，
+    避免"一开始没拿到后面一直拿不到"。
+    """
+    if q is None or None not in (q.get("pe"), q.get("pb"), q.get("mktcap")):
+        return q
+    try:
+        em = _quote_eastmoney(q["secid"])
+    except Exception:
+        em = None
+    if not em or all(v is None for v in (em.get("pe"), em.get("pb"), em.get("mktcap"))):
+        em = _quote_tencent(q["secid"])
+    if em:
+        for k in ("pe", "pb", "mktcap", "float_mktcap"):
+            if q.get(k) is None and em.get(k) is not None:
+                q[k] = em.get(k)
+    return q
+
+
 def fetch_quotes(secids):
     """东财 ulist 批量实时行情（含 PE/PB/市值等基本面）；失败回退逐只新浪。"""
     secids = [s.strip() for s in secids if s and s.strip()]
@@ -611,25 +632,14 @@ def fetch_quotes(secids):
                 "float_mktcap": it.get("f21"),  # 流通市值(元)
             })
         if out:
-            return out
+            # 批量成功但个别股票基本面字段缺失 → 补齐（保险机制）
+            return [_fill_fundamentals(q) for q in out]
     except Exception as exc:
         print(f"[quotes] 东财批量失败: {exc}")
     # 回退：逐只新浪（新浪无 PE/PB/市值字段）→ 依次用东财单股、腾讯接口
     # 补齐（双备源提高命中率，避免基本面信息缺失）
     fallback = [q for q in (fetch_quote(s) for s in secids) if q]
-    for q in fallback:
-        if None in (q.get("pe"), q.get("pb"), q.get("mktcap")):
-            try:
-                em = _quote_eastmoney(q["secid"])
-            except Exception:
-                em = None
-            if not em or all(v is None for v in (em.get("pe"), em.get("pb"), em.get("mktcap"))):
-                em = _quote_tencent(q["secid"])
-            if em:
-                for k in ("pe", "pb", "mktcap", "float_mktcap"):
-                    if q.get(k) is None and em.get(k) is not None:
-                        q[k] = em.get(k)
-    return fallback
+    return [_fill_fundamentals(q) for q in fallback]
 
 
 def _tencent_code(secid):
