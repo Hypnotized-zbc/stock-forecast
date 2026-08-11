@@ -1,5 +1,23 @@
 # 更新报告
 
+## v0.11.0 (2026-08-11)
+- 未录入股票时图表光标恢复正常（用户要求）：
+  - 根因：CSS `canvas { cursor: crosshair }` 全局生效，无数据时也是十字形
+  - 修复：drawTooltip/drawFutureTooltip 初始化 cv/fcv 为 default；无数据
+    （含数据边界外）mousemove 保持 default，有数据时改 crosshair
+- 放大拖拽经过浮动窗口不再卡顿（用户报告）：
+  - 根因：拖拽 mousemove 监听在 zoomCanvas 上，鼠标移到 pinTip（上层
+    元素）后事件不再到达 zoomCanvas，拖拽中断
+  - 修复：拖拽逻辑改到 window 级 mousemove（事件冒泡必然到达），
+    鼠标经过浮窗等任何上层元素时拖拽不断开；zoomCanvas 的 mousemove
+    只保留 hover 十字线
+- 验证（Edge CDP，40 天模拟数据）：
+  - 无数据：初始 cursor default、mousemove 后仍 default
+  - 有数据：mousemove → crosshair
+  - 放大锁定后拖拽：mousemove 在 zoomCanvas 上 ZOOM {10,39}→{9,38}；
+    mousemove dispatch 到 pinTip 上 → 继续 {4,33}（拖拽不断开）
+  - 无 JS 错误；静态 15 项断言全过
+
 ## v0.10.10 (2026-08-11)
 - 修复放大模式拖拽松手在固定窗口上被误判清除（用户报告 bug）：
   - 根因：拖拽 mousedown 在 zoomCanvas、鼠标松开在 pinTip 上时，浏览器

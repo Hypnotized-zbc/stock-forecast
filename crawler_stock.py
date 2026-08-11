@@ -1282,9 +1282,11 @@ function drawPinLine(v) {
 
 // 未来预测图悬停：十字线 + 浮窗显示各预测线当日值
 function drawFutureTooltip() {
+  fcv.style.cursor = "default";  // 未录入数据时正常光标
   fcv.onmousemove = e => {
     const tip = document.getElementById("futureTip");
-    if (!D || !D.fit || !D.fit.arima || !D.fit.arima.predict) return;
+    if (!D || !D.fit || !D.fit.arima || !D.fit.arima.predict) { fcv.style.cursor = "default"; return; }
+    fcv.style.cursor = "crosshair";
     const rect = fcv.getBoundingClientRect();
     const px = (e.clientX - rect.left) * W / rect.width;
     const padL = 70, padR = 24, padT = 60, padB = 46;
@@ -1550,12 +1552,14 @@ function showPinTip(v) {
 }
 
 function drawTooltip() {
+  cv.style.cursor = "default";  // 未录入股票时正常光标（有数据进入时改 crosshair）
   cv.onmousemove = e => {
-    if (!D || !n) return;
+    if (!D || !n) { cv.style.cursor = "default"; return; }
     const rect = cv.getBoundingClientRect();
     const px = (e.clientX-rect.left) * W / rect.width;
     const i = Math.round((px-PAD.L) * Math.max(1,n-1) / (W-PAD.L-PAD.R));
-    if (i<0 || i>=n) return;
+    if (i<0 || i>=n) { cv.style.cursor = "default"; return; }
+    cv.style.cursor = "crosshair";
     // 按当前视图重绘：行情视图画当前图类型，拟合视图重画拟合图（不变成K线）
     if (view === "fit") { drawFit(); }
     else { paint(currentType); }
@@ -1742,20 +1746,7 @@ function drawZoomCrosshair(fi) {
 
   zc.addEventListener("mousemove", e => {
     if (!ZOOM) return;
-    if (_zoomDrag) {
-      const rect = zc.getBoundingClientRect();
-      const dx = (e.clientX - _zoomDrag.startX) * (W / rect.width);
-      const span = _zoomDrag.i1 - _zoomDrag.i0;
-      const dIdx = Math.round(-dx * span / (W - PAD.L - PAD.R));
-      const total = zoomTotalIdx();
-      let i0 = _zoomDrag.i0 + dIdx;
-      i0 = Math.max(0, Math.min(total - span, i0));
-      ZOOM.i0 = i0; ZOOM.i1 = i0 + span;
-      drawZoomCanvas();
-      if (window._pin && window._pin.view === view) showPinTip(view);  // 固定窗口随图像移动
-      _zoomDrag.moved = true;
-      return;
-    }
+    if (_zoomDrag) return;  // 拖拽中由 window 级监听跟随鼠标（经过浮窗不断开）
     const fi = zoomIdxFromClientX(e.clientX);
     const i = Math.round(fi);
     if (i < ZOOM.i0 || i > ZOOM.i1) return;
@@ -1815,6 +1806,21 @@ function drawZoomCrosshair(fi) {
     if (!ZOOM || e.button !== 0) return;
     _zoomDrag = {startX: e.clientX, i0: ZOOM.i0, i1: ZOOM.i1, moved: false};
     zc.style.cursor = "grabbing";
+  });
+  // 拖拽跟随鼠标：window 级监听——鼠标经过固定窗口等上层元素时拖拽不断开
+  window.addEventListener("mousemove", e => {
+    if (!_zoomDrag) return;
+    const rect = zc.getBoundingClientRect();
+    const dx = (e.clientX - _zoomDrag.startX) * (W / rect.width);
+    const span = _zoomDrag.i1 - _zoomDrag.i0;
+    const dIdx = Math.round(-dx * span / (W - PAD.L - PAD.R));
+    const total = zoomTotalIdx();
+    let i0 = _zoomDrag.i0 + dIdx;
+    i0 = Math.max(0, Math.min(total - span, i0));
+    ZOOM.i0 = i0; ZOOM.i1 = i0 + span;
+    drawZoomCanvas();
+    if (window._pin && window._pin.view === view) showPinTip(view);  // 固定窗口随图像移动
+    _zoomDrag.moved = true;
   });
   window.addEventListener("mouseup", () => {
     if (_zoomDrag) {
