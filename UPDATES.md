@@ -1,5 +1,24 @@
 # 更新报告
 
+## v0.12.9 (2026-08-11)
+- AI 解读窗口宽度与图表对齐（用户反馈"凸出来一点"）：
+  - 根因：页面无 box-sizing:border-box，.wrap(padding 12px) 实际宽 1204px、
+    .ai-panel(padding 16px) 实际宽 1212px——AI 窗口比图表凸出 8px
+  - 修复：全局 `* { box-sizing: border-box; }`，所有 max-width 含 padding，
+    各卡片完全对齐（CDP 实测 diff=0）
+- PE/PB 实时数据读不出（用户反馈）：
+  - 根因：东财在 WSL 下频繁断连（批量+单股全失败）→ 新浪回退无 PE/PB →
+    前端显示"—"
+  - 修复：新增腾讯行情接口备源 _quote_tencent（qt.gtimg.cn，字段 39=PE、
+    46=PB，实测神华 18.8/2.03 合理）；新浪回退后 PE/PB 依次用东财单股、
+    腾讯接口补齐（双备源）
+- 验证：
+  - 后端实测腾讯接口返回 {'pe': 18.8, 'pb': 2.03}
+  - /api/quotes 全链路：东财失败→新浪回退→腾讯补齐，
+    神华 PE18.8/PB2.03、茅台 PE20.35/PB7.23 全部有值
+  - CDP：AI 面板 691px = 图表容器 691px（diff=0）
+  - 无 JS 错误；静态 9 项断言全过
+
 ## v0.12.8 (2026-08-11)
 - 删除热力图功能（用户反馈：仅涨跌幅矩形块、丢失 PE/PB/昨收等数据，无实际价值）：
   - 移除 _wlMode 状态、wlModeBtn 切换按钮、heat-grid/heat-cell 渲染分支、

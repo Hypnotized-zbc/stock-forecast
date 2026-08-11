@@ -614,21 +614,51 @@ def fetch_quotes(secids):
             return out
     except Exception as exc:
         print(f"[quotes] 东财批量失败: {exc}")
-    # 回退：逐只新浪（新浪无 PE/PB 字段）→ PE/PB 用东财单股接口补齐，
-    # 避免新浪回退时基本面信息缺失
+    # 回退：逐只新浪（新浪无 PE/PB 字段）→ PE/PB 依次用东财单股、腾讯接口
+    # 补齐（双备源提高命中率，避免基本面信息缺失）
     fallback = [q for q in (fetch_quote(s) for s in secids) if q]
     for q in fallback:
         if q.get("pe") is None or q.get("pb") is None:
             try:
                 em = _quote_eastmoney(q["secid"])
-                if em:
-                    if q.get("pe") is None:
-                        q["pe"] = em.get("pe")
-                    if q.get("pb") is None:
-                        q["pb"] = em.get("pb")
             except Exception:
-                pass
+                em = None
+            if not em or (em.get("pe") is None and em.get("pb") is None):
+                em = _quote_tencent(q["secid"])
+            if em:
+                if q.get("pe") is None and em.get("pe") is not None:
+                    q["pe"] = em.get("pe")
+                if q.get("pb") is None and em.get("pb") is not None:
+                    q["pb"] = em.get("pb")
     return fallback
+
+
+def _tencent_code(secid):
+    """东财 secid(1.601088) → 腾讯代码(sh601088)。"""
+    prefix, code = secid.split(".")
+    return ("sh" if prefix == "1" else "sz") + code
+
+
+def _quote_tencent(secid):
+    """腾讯行情接口 qt.gtimg.cn：取 PE/PB 基本面（字段 39=PE、46=PB）。失败返回 None。"""
+    try:
+        resp = _SESSION.get(
+            f"https://qt.gtimg.cn/q={_tencent_code(secid)}",
+            headers={"Referer": "http://finance.qq.com"}, timeout=8,
+        )
+        resp.raise_for_status()
+        raw = resp.content.decode("gbk", errors="replace")
+        m = re.search(r'="([^"]+)"', raw)
+        if not m:
+            return None
+        f = m.group(1).split("~")
+        if len(f) < 47:
+            return None
+        pe = float(f[39]) if f[39] not in ("", "0.00") else None
+        pb = float(f[46]) if f[46] not in ("", "0.00") else None
+        return {"pe": pe, "pb": pb}
+    except Exception:
+        return None
 
 
 def fetch_quote(secid):
