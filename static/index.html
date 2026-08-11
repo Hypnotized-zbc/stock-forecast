@@ -267,17 +267,17 @@ function xOf(i) {
 }
 function yOf(v, mn, mx) { return PAD.T + (mx-v) * (H-PAD.T-PAD.B) / (mx-mn); }
 
-function drawAxes(mn, mx, ticks) {
+function drawAxes(mn, mx, ticks, firstIdx) {
   ctx.strokeStyle = "#f0f0f0"; ctx.fillStyle = "#888"; ctx.font = "12px sans-serif"; ctx.lineWidth = 1;
   for (let t=0; t<=ticks; t++) {
     const v = mn + (mx-mn)*t/ticks;
     const y = yOf(v, mn, mx);
     ctx.beginPath(); ctx.moveTo(PAD.L, y); ctx.lineTo(W-PAD.R, y); ctx.stroke();
   }
-  drawAxisLabels(mn, mx, ticks);
+  drawAxisLabels(mn, mx, ticks, firstIdx);
 }
 // 坐标轴标签（刻度数值 + 日期）。放大模式在 clip 外单独调用，保证坐标轴始终可见
-function drawAxisLabels(mn, mx, ticks) {
+function drawAxisLabels(mn, mx, ticks, firstIdx) {
   ctx.fillStyle = "#888"; ctx.font = "12px sans-serif";
   for (let t=0; t<=ticks; t++) {
     const v = mn + (mx-mn)*t/ticks;
@@ -288,7 +288,8 @@ function drawAxisLabels(mn, mx, ticks) {
   const [a0, a1] = zRange();
   const step = Math.max(1, Math.ceil((a1 - a0) / 8));
   for (let i = a0; i <= a1; i += step) {
-    ctx.fillText(D.dates[i], xOf(i), H-PAD.B+18);
+    if (firstIdx != null && i < firstIdx) continue;  // 预热期无数据不标日期
+    ctx.fillText(D.dates[i], firstIdx != null ? indXOf(i, firstIdx) : xOf(i), H-PAD.B+18);
   }
 }
 
@@ -314,15 +315,16 @@ function drawKline() {
 
 // ---- 5日均线图 ----
 function drawMA5() {
+  _indFirstIdx = firstValidIdx(["ma5"]);
   const arrs = [["收盘", D.closes, "#6b7280", 1.0], ["MA5", D.ma5, "#3b82f6", 2.0]];
   const [mn, mx] = seriesMinMax([...D.closes, ...D.ma5.filter(v=>v!=null)], 0.06);
-  drawAxes(mn, mx, 5);
+  drawAxes(mn, mx, 5, _indFirstIdx);
   for (const [nm, arr, color, lw] of arrs) {
     ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.beginPath();
     let started = false;
     for (let i=0; i<n; i++) {
       if (arr[i]==null) { started = false; continue; }
-      const x = xOf(i), y = yOf(arr[i], mn, mx);
+      const x = indXOf(i,_indFirstIdx), y = yOf(arr[i], mn, mx);
       started ? ctx.lineTo(x,y) : ctx.moveTo(x,y);
       started = true;
     }
@@ -333,19 +335,20 @@ function drawMA5() {
 
 // ---- BOLL 布林带 ----
 function drawBOLL() {
+  _indFirstIdx = firstValidIdx(["boll_up", "boll_low"]);
   const vals = [...D.boll_up.filter(v=>v!=null), ...D.boll_low.filter(v=>v!=null)];
   const [mn, mx] = seriesMinMax(vals, 0.05);
-  drawAxes(mn, mx, 5);
+  drawAxes(mn, mx, 5, _indFirstIdx);
   ctx.fillStyle = "rgba(59,130,246,0.10)"; ctx.beginPath();
   let started = false;
   for (let i=0; i<n; i++) {
     if (D.boll_up[i]==null) { started=false; continue; }
-    const x=xOf(i), y=yOf(D.boll_up[i],mn,mx);
+    const x=indXOf(i,_indFirstIdx), y=yOf(D.boll_up[i],mn,mx);
     started ? ctx.lineTo(x,y) : ctx.moveTo(x,y); started=true;
   }
   for (let i=n-1; i>=0; i--) {
     if (D.boll_low[i]==null) continue;
-    ctx.lineTo(xOf(i), yOf(D.boll_low[i],mn,mx));
+    ctx.lineTo(indXOf(i,_indFirstIdx), yOf(D.boll_low[i],mn,mx));
   }
   ctx.closePath(); ctx.fill();
   const lines = [["BOLL上", D.boll_up, "#e03434"], ["BOLL中", D.boll_mid, "#9ca3af"],
@@ -355,12 +358,12 @@ function drawBOLL() {
     let started=false;
     for (let i=0; i<n; i++) {
       if (arr[i]==null) { started=false; continue; }
-      const x=xOf(i), y=yOf(arr[i],mn,mx);
+      const x=indXOf(i,_indFirstIdx), y=yOf(arr[i],mn,mx);
       started ? ctx.lineTo(x,y) : ctx.moveTo(x,y); started=true;
     }
     ctx.stroke();
   }
-  legend("<span><i style='color:#e03434'>—</i> 上轨</span><span><i style='color:#9ca3af'>—</i> 中轨(MA20)</span><span><i style='color:#089981'>—</i> 下轨</span>");
+  legend("<span><i style='color:#e03434'>■</i> 上轨</span><span><i style='color:#9ca3af'>■</i> 中轨</span><span><i style='color:#089981'>■</i> 下轨</span>");
 }
 
 // ---- 成交量 ----
@@ -398,14 +401,45 @@ function drawChange() {
 }
 
 // 通用折线序列（key 为 D 上的数组字段，null 处断线）
-function drawLineSeries(key, mn, mx, color, width) {
+let _indFirstIdx = null;  // 指标图有效数据起点（x 对齐用，paint 时按类型计算）
+
+// 指标图第一个有效数据索引（BOLL 前19天/RSI 前14天等预热期为 null）
+function firstValidIdx(keys) {
+  for (let i = 0; i < n; i++) {
+    for (const k of keys) if (D[k] && D[k][i] != null) return i;
+  }
+  return 0;
+}
+
+// 指标图 x 映射：从 firstIdx 开始填满绘图区（左侧对齐坐标轴），放大模式用 ZOOM 范围
+function indXOf(i, firstIdx) {
+  const f = firstIdx || 0;
+  if (ZOOM) {
+    const span = Math.max(1, ZOOM.i1 - ZOOM.i0);
+    return PAD.L + (i - ZOOM.i0) * (W - PAD.L - PAD.R) / span;
+  }
+  const span = Math.max(1, n - 1 - f);
+  return PAD.L + Math.max(0, i - f) * (W - PAD.L - PAD.R) / span;
+}
+
+// 指标图类型 → 有效字段
+function indKeysFor(type) {
+  if (type === "boll") return ["boll_up", "boll_low"];
+  if (type === "ma5") return ["ma5"];
+  if (type === "macd") return ["macd_dif", "macd_dea", "macd_hist"];
+  if (type === "kdj") return ["kdj_k", "kdj_d", "kdj_j"];
+  if (type === "rsi") return ["rsi"];
+  return [];
+}
+
+function drawLineSeries(key, mn, mx, color, width, firstIdx) {
   ctx.strokeStyle = color; ctx.lineWidth = width || 1.4;
   ctx.beginPath();
   let started = false;
   for (let i=0; i<n; i++) {
     const v = D[key] ? D[key][i] : null;
     if (v == null) { started = false; continue; }
-    const x = xOf(i), y = yOf(v, mn, mx);
+    const x = firstIdx != null ? indXOf(i, firstIdx) : xOf(i), y = yOf(v, mn, mx);
     if (started) ctx.lineTo(x, y); else ctx.moveTo(x, y);
     started = true;
   }
@@ -414,6 +448,7 @@ function drawLineSeries(key, mn, mx, color, width) {
 
 // ---- MACD（DIF/DEA/柱）----
 function drawMACD() {
+  _indFirstIdx = firstValidIdx(["macd_dif", "macd_dea", "macd_hist"]);
   const vals = [];
   for (let i=0; i<n; i++) {
     if (D.macd_dif && D.macd_dif[i] != null) vals.push(D.macd_dif[i]);
@@ -423,7 +458,7 @@ function drawMACD() {
   if (!vals.length) { drawEmpty("暂无 MACD 数据（请重新查询刷新缓存）"); return; }
   const [mn, mx] = seriesMinMax(vals, 0.05);
   const lo = Math.min(mn, 0), hi = Math.max(mx, 0);
-  drawAxes(lo, hi, 5);
+  drawAxes(lo, hi, 5, _indFirstIdx);
   const y0 = yOf(0, lo, hi);
   ctx.strokeStyle = "#999"; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(PAD.L, y0); ctx.lineTo(W-PAD.R, y0); ctx.stroke();
@@ -435,32 +470,34 @@ function drawMACD() {
     ctx.fillStyle = h >= 0 ? UP : DOWN;
     const y = yOf(h, lo, hi);
     const y1 = Math.min(y, y0), h1 = Math.max(1, Math.abs(y-y0));
-    ctx.fillRect(xOf(i)-bw/2, y1, bw, h1);
+    ctx.fillRect(indXOf(i,_indFirstIdx)-bw/2, y1, bw, h1);
   }
-  drawLineSeries("macd_dif", lo, hi, "#f59e0b", 1.4);
-  drawLineSeries("macd_dea", lo, hi, "#3b82f6", 1.4);
+  drawLineSeries("macd_dif", lo, hi, "#f59e0b", 1.4, _indFirstIdx);
+  drawLineSeries("macd_dea", lo, hi, "#3b82f6", 1.4, _indFirstIdx);
   legend("<span><i style='color:#f59e0b'>■</i> DIF</span><span><i style='color:#3b82f6'>■</i> DEA</span><span><i style='color:#e03434'>■</i> 柱(2×差值)</span>");
 }
 
 // ---- KDJ（K/D/J）----
 function drawKDJ() {
+  _indFirstIdx = firstValidIdx(["kdj_k", "kdj_d", "kdj_j"]);
   const vals = [];
   for (const k of ["kdj_k", "kdj_d", "kdj_j"]) {
     if (D[k]) for (let i=0; i<n; i++) if (D[k][i] != null) vals.push(D[k][i]);
   }
   if (!vals.length) { drawEmpty("暂无 KDJ 数据（请重新查询刷新缓存）"); return; }
   const [mn, mx] = seriesMinMax(vals, 0.05);
-  drawAxes(mn, mx, 5);
-  drawLineSeries("kdj_k", mn, mx, "#f59e0b", 1.4);
-  drawLineSeries("kdj_d", mn, mx, "#3b82f6", 1.4);
-  drawLineSeries("kdj_j", mn, mx, "#8b5cf6", 1.2);
+  drawAxes(mn, mx, 5, _indFirstIdx);
+  drawLineSeries("kdj_k", mn, mx, "#f59e0b", 1.4, _indFirstIdx);
+  drawLineSeries("kdj_d", mn, mx, "#3b82f6", 1.4, _indFirstIdx);
+  drawLineSeries("kdj_j", mn, mx, "#8b5cf6", 1.2, _indFirstIdx);
   legend("<span><i style='color:#f59e0b'>■</i> K</span><span><i style='color:#3b82f6'>■</i> D</span><span><i style='color:#8b5cf6'>■</i> J</span>");
 }
 
 // ---- RSI（0-100，30/70 参考线）----
 function drawRSI() {
+  _indFirstIdx = firstValidIdx(["rsi"]);
   const lo = 0, hi = 100;
-  drawAxes(lo, hi, 4);
+  drawAxes(lo, hi, 4, _indFirstIdx);
   ctx.strokeStyle = "#ddd"; ctx.lineWidth = 1;
   for (const lv of [30, 70]) {
     const y = yOf(lv, lo, hi);
@@ -470,7 +507,7 @@ function drawRSI() {
   }
   const has = D.rsi && D.rsi.some(v => v != null);
   if (!has) { drawEmpty("暂无 RSI 数据（请重新查询刷新缓存）"); return; }
-  drawLineSeries("rsi", lo, hi, "#8b5cf6", 1.6);
+  drawLineSeries("rsi", lo, hi, "#8b5cf6", 1.6, _indFirstIdx);
   legend("<span><i style='color:#8b5cf6'>■</i> RSI(14)</span><span>30 超卖 / 70 超买</span>");
 }
 
@@ -701,7 +738,8 @@ function drawPinLine(v) {
   }
   if (i < 0 || i >= n) return;
   ctx.strokeStyle = "rgba(17,24,39,0.5)"; ctx.setLineDash([4,4]); ctx.lineWidth = 1.2;
-  ctx.beginPath(); ctx.moveTo(xOf(i), PAD.T); ctx.lineTo(xOf(i), H-PAD.B); ctx.stroke();
+  const px = _indFirstIdx != null ? indXOf(i, _indFirstIdx) : xOf(i);
+  ctx.beginPath(); ctx.moveTo(px, PAD.T); ctx.lineTo(px, H-PAD.B); ctx.stroke();
   ctx.setLineDash([]);
 }
 
@@ -847,11 +885,11 @@ function paint(type) {
     ctx.fillText("请先在上方输入股票名称查询", W/2, H/2);
     return;
   }
-  if (type=="kline" || type=="kline-week" || type=="kline-month") drawKline();
+  if (type=="kline" || type=="kline-week" || type=="kline-month") { _indFirstIdx = null; drawKline(); }
+  else if (type=="vol") { _indFirstIdx = null; drawVol(); }
+  else if (type=="change") { _indFirstIdx = null; drawChange(); }
   else if (type=="ma5") drawMA5();
   else if (type=="boll") drawBOLL();
-  else if (type=="vol") drawVol();
-  else if (type=="change") drawChange();
   else if (type=="macd") drawMACD();
   else if (type=="kdj") drawKDJ();
   else if (type=="rsi") drawRSI();
@@ -859,7 +897,7 @@ function paint(type) {
   drawPinLine("chart");
 }
 function drawCrosshair(i) {
-  const x = xOf(i);
+  const x = _indFirstIdx != null ? indXOf(i, _indFirstIdx) : xOf(i);
   ctx.strokeStyle = "rgba(0,0,0,0.22)"; ctx.lineWidth = 1;
   ctx.setLineDash([4, 4]);
   ctx.beginPath(); ctx.moveTo(x, PAD.T); ctx.lineTo(x, H-PAD.B); ctx.stroke();
@@ -919,9 +957,9 @@ function tipContentFor(view, i) {
       row2("J", v(D.kdj_j && D.kdj_j[i]));
   }
   if (currentType === "rsi") {
-    const v = x != null ? x.toFixed(2) : "—";
+    const v = x => x != null ? x.toFixed(2) : "—";
     return row2("日期", "<b>"+D.dates[i]+"</b>") +
-      row2("RSI(14)", v) +
+      row2("RSI(14)", v(D.rsi && D.rsi[i])) +
       row2("状态", D.rsi && D.rsi[i] != null ? (D.rsi[i] >= 70 ? "超买" : D.rsi[i] <= 30 ? "超卖" : "中性") : "—");
   }
   return row2("日期", "<b>"+D.dates[i]+"</b>") +
@@ -1915,7 +1953,7 @@ let _cmpState = null;  // 对比图绘制上下文（纵线/浮窗用）
 let _cmpPin = null;    // 对比图锁定状态：{xi, tipX, tipY}——双击锁定纵线+浮窗，浮窗可拖动
 let _cmpSize = null;   // 对比图画布尺寸（首次确定后固定，避免鼠标移动重绘导致窗口抖动）
 
-// 对比图小浮窗：填充各股票数值并定位（tipEl 可传跟随浮窗）
+// 对比图小浮窗：填充各股票数值并定位（tipEl 可传跟随浮窗；位置 clamp 在画布内防抖动）
 function showCmpTipAt(xi, tipX, tipY, tipEl) {
   const st = _cmpState;
   if (!st) return;
@@ -1929,6 +1967,10 @@ function showCmpTipAt(xi, tipX, tipY, tipEl) {
   });
   tip.innerHTML = html;
   tip.style.display = "block";
+  // clamp 在画布内：浮窗不超出画布，避免撑出滚动条导致窗口抖动
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  tipX = Math.max(2, Math.min(tipX, st.W2 - tw - 2));
+  tipY = Math.max(2, Math.min(tipY, st.H2 - th - 2));
   tip.style.left = tipX + "px";
   tip.style.top = tipY + "px";
 }
@@ -2034,13 +2076,19 @@ cmpCanvas.addEventListener("mousemove", e => {
   const rect = cmpCanvas.getBoundingClientRect();
   const x = e.clientX - rect.left, y = e.clientY - rect.top;
   const followTip = document.getElementById("cmpFollowTip");
-  // 锁定状态：锁定纵线+锁定浮窗保持，鼠标移动仍显示跟随浮窗（与主图一致）
+  // 锁定状态：锁定纵线+锁定浮窗保持，鼠标移动显示虚线跟随 + 跟随浮窗（与主图一致）
   if (_cmpPin) {
     drawCompare();
     const c2 = cmpCanvas.getContext("2d");
     c2.strokeStyle = "#2563eb"; c2.lineWidth = 1.5;
     c2.beginPath(); c2.moveTo(st.xOf(_cmpPin.xi), st.padT); c2.lineTo(st.xOf(_cmpPin.xi), st.H2 - st.padB); c2.stroke();
     showCmpTipAt(_cmpPin.xi, _cmpPin.tipX, _cmpPin.tipY);
+    // 虚线跟随：鼠标在绘图区内画虚线纵线
+    if (x >= st.padL && x <= st.W2 - st.padR && y >= st.padT && y <= st.H2 - st.padB) {
+      c2.strokeStyle = "rgba(0,0,0,0.25)"; c2.lineWidth = 1; c2.setLineDash([4, 4]);
+      c2.beginPath(); c2.moveTo(x, st.padT); c2.lineTo(x, st.H2 - st.padB); c2.stroke();
+      c2.setLineDash([]);
+    }
     // 跟随浮窗：鼠标在绘图区内则显示鼠标位置数据（避让锁定浮窗）
     if (x >= st.padL && x <= st.W2 - st.padR && y >= st.padT && y <= st.H2 - st.padB) {
       const xi = Math.max(0, Math.min(st.len - 1, Math.round((x - st.padL) / st.plotW * (st.len - 1))));
