@@ -1562,7 +1562,7 @@ function setChartData(data, name, secid) {
   updateCurQuote(secid);
   document.getElementById("rangeInfo").textContent =
     (data.name || name) + " | " + D.dates[0] + " ~ " + D.dates[n-1] + " | 共 " + n + " 个交易日";
-  document.getElementById("candidateBox").innerHTML = "";
+  // 注意：不清空 candidateBox——候选选项在加入自选股/重新搜索前保持显示，避免闪烁消失
   setStatus("完成");
   paint(currentType);
   refreshAllQuotes();
