@@ -1403,6 +1403,10 @@ let _quoteTimer = null;
 let _watchQuotes = {};
 let _lastQuoteTs = null;  // 最近一次实时行情刷新时间（时间戳显示）
 let _wlMode = "list";     // 自选股显示模式：list=列表 / grid=热力图
+let _aiCache = {};        // AI 解读缓存：secid_周期 → 文本（localStorage 持久化）
+try { _aiCache = JSON.parse(localStorage.getItem("aiCache") || "{}"); } catch (e) { _aiCache = {}; }
+function saveAiCache() { try { localStorage.setItem("aiCache", JSON.stringify(_aiCache)); } catch (e) {} }
+function aiCacheKey() { return _curSecid + "_" + (document.getElementById("chartPeriod").value || "day"); }
 let _watch = [];
 try { _watch = JSON.parse(localStorage.getItem("wl") || "[]"); } catch (e) { _watch = []; }
 
@@ -1466,6 +1470,15 @@ function setChartData(data, name, secid) {
   showPinTip(view);
   refreshAllQuotes();
   startQuoteTimer();
+  // AI 解读面板同步当前股票：有缓存显示，无缓存隐藏（避免残留上一只股票的解读）
+  const aiPanel = document.getElementById("aiPanel");
+  const aiText = _aiCache[aiCacheKey()];
+  if (aiText) {
+    aiPanel.style.display = "block";
+    aiPanel.innerHTML = "<div class='ai-title'>✨ AI 技术解读 · " + (_curName || "") + "</div>" + aiText;
+  } else {
+    aiPanel.style.display = "none";
+  }
 }
 
 function fmtTime(ts) {
@@ -1706,7 +1719,15 @@ document.getElementById("chartPeriod").addEventListener("change", e => {
 });
 document.getElementById("aiBtn").addEventListener("click", async () => {
   if (!D || !n) { setStatus("请先查询股票再使用 AI 解读"); return; }
+  const secid = _curSecid;
   const panel = document.getElementById("aiPanel");
+  const ck = aiCacheKey();
+  // 缓存命中：直接显示已保存的解读，不重复请求
+  if (_aiCache[ck]) {
+    panel.style.display = "block";
+    panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读 · " + (_curName || "") + "</div>" + _aiCache[ck];
+    return;
+  }
   panel.style.display = "block";
   panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读 · " + (_curName || "") + "</div><div style='color:#9ca3af'>正在请求 DeepSeek，约 5~15 秒…</div>";
   const recent = [];
@@ -1715,12 +1736,16 @@ document.getElementById("aiBtn").addEventListener("click", async () => {
     recent.push({d: D.dates[i], o: D.opens[i], c: D.closes[i], h: D.highs[i], l: D.lows[i], ch: D.changes[i]});
   }
   try {
-    const resp = await fetch("/api/insight?secid=" + encodeURIComponent(_curSecid || "") +
+    const resp = await fetch("/api/insight?secid=" + encodeURIComponent(secid || "") +
                              "&name=" + encodeURIComponent(_curName || "") +
                              "&recent=" + encodeURIComponent(JSON.stringify(recent)));
     const data = await resp.json();
     if (data.error) panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读</div><div style='color:#c0392b'>" + data.error + "</div>";
-    else panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读 · " + (_curName || "") + "</div>" + data.text.replace(/\n/g, "<br>");
+    else {
+      _aiCache[ck] = data.text;  // 保存解读，切换股票回来不再重复请求
+      saveAiCache();
+      panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读 · " + (_curName || "") + "</div>" + data.text.replace(/\n/g, "<br>");
+    }
   } catch (e) {
     panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读</div><div style='color:#c0392b'>请求失败: " + e + "</div>";
   }

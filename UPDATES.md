@@ -1,5 +1,19 @@
 # 更新报告
 
+## v0.12.2 (2026-08-11)
+- AI 解读按股票缓存 + 切换股票同步（用户要求）：
+  - 新增 _aiCache（localStorage 持久化，key=secid_周期）：解读成功后保存，
+    再次查看直接显示不重新请求
+  - aiBtn 点击：缓存命中直接显示；未命中才调 /api/insight 并写缓存
+  - setChartData 切换股票时同步面板：新股票有缓存则显示对应解读，
+    无缓存则隐藏（避免残留上一只股票的解读）；切回原股票秒显缓存
+- 验证（Edge CDP + 真实 DeepSeek 调用）：
+  - 打开有缓存股票 → 面板直接显示缓存解读（无请求）
+  - 切茅台 → 面板隐藏；切回神华 → 面板显示缓存
+  - 茅台首次点击 → 真实请求返回文本并写入 _aiCache + localStorage
+  - 再次点击 → 立即显示缓存（无"正在请求"，不重复请求）
+  - 无 JS 错误；静态 12 项断言全过
+
 ## v0.12.1 (2026-08-11)
 - AI 解读接入 deepseek-v4-flash（用户指定模型配置）：
   - backend.py 新增 LLM_MODEL="deepseek-v4-flash"、LLM_BASE_URL="https://api.deepseek.com/v1"
