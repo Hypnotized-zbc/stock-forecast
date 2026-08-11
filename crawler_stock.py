@@ -929,6 +929,15 @@ function drawAxes(mn, mx, ticks) {
     const v = mn + (mx-mn)*t/ticks;
     const y = yOf(v, mn, mx);
     ctx.beginPath(); ctx.moveTo(PAD.L, y); ctx.lineTo(W-PAD.R, y); ctx.stroke();
+  }
+  drawAxisLabels(mn, mx, ticks);
+}
+// 坐标轴标签（刻度数值 + 日期）。放大模式在 clip 外单独调用，保证坐标轴始终可见
+function drawAxisLabels(mn, mx, ticks) {
+  ctx.fillStyle = "#888"; ctx.font = "12px sans-serif";
+  for (let t=0; t<=ticks; t++) {
+    const v = mn + (mx-mn)*t/ticks;
+    const y = yOf(v, mn, mx);
     ctx.textAlign = "right"; ctx.fillText(fmt(v), PAD.L-8, y+4);
   }
   ctx.textAlign = "center";
@@ -1165,23 +1174,14 @@ function drawFuture() {
   fctx.fillStyle = "rgba(255, 235, 160, 0.25)";
   fctx.fillRect(padL, padT, plotW, plotH);
 
-  // 网格 + y 轴
+  // 网格线（标签由 drawFutureAxisLabels 单独画，放大模式在 clip 外保证可见）
   fctx.strokeStyle = "#e8e8e8"; fctx.fillStyle = "#888"; fctx.font = "12px sans-serif";
   for (let t = 0; t <= 5; t++) {
     const v = lo + (hi - lo) * t / 5;
     const y = yOf(v);
     fctx.beginPath(); fctx.moveTo(padL, y); fctx.lineTo(W - padR, y); fctx.stroke();
-    fctx.textAlign = "right"; fctx.fillText(v.toFixed(2), padL - 8, y + 4);
   }
-
-  // x 轴日期（MM-DD），放大时只标可见范围
-  fctx.textAlign = "center";
-  const fz = ZOOM ? [ZOOM.i0, ZOOM.i1] : [0, m - 1];
-  const fstep = Math.max(1, Math.ceil((fz[1] - fz[0]) / 8));
-  for (let i = fz[0]; i <= fz[1]; i += fstep) {
-    const dt = dates[i] ? dates[i].slice(5) : ("+" + (i + 1));
-    fctx.fillText(dt, xF(i), H - padB + 18);
-  }
+  drawFutureAxisLabels(lo, hi);
 
   // 现价基准线（黑色虚线，不标文字避免遮挡）
   fctx.strokeStyle = "#111827"; fctx.lineWidth = 1.6; fctx.setLineDash([6, 4]);
@@ -1230,6 +1230,32 @@ function drawFuture() {
     fctx.fillText(wp[i].toFixed(2), x, y - 12);
   }
   drawPinLine("future");
+}
+
+// 未来预测视图坐标轴标签（放大模式在 clip 外调用，保证刻度/日期可见）
+function drawFutureAxisLabels(lo, hi) {
+  const padL = 70, padR = 24, padT = 60, padB = 46, m = 10;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const dates = D.fit.arima.predict_dates || [];
+  const xF = i => {
+    if (!ZOOM) return padL + i * plotW / Math.max(1, m - 1);
+    const span = Math.max(1, ZOOM.i1 - ZOOM.i0);
+    return padL + (i - ZOOM.i0) * plotW / span;
+  };
+  const yOfF = v => padT + (hi - v) * plotH / (hi - lo);
+  fctx.fillStyle = "#888"; fctx.font = "12px sans-serif";
+  for (let t = 0; t <= 5; t++) {
+    const v = lo + (hi - lo) * t / 5;
+    const y = yOfF(v);
+    fctx.textAlign = "right"; fctx.fillText(v.toFixed(2), padL - 8, y + 4);
+  }
+  fctx.textAlign = "center";
+  const fz = ZOOM ? [ZOOM.i0, ZOOM.i1] : [0, m - 1];
+  const fstep = Math.max(1, Math.ceil((fz[1] - fz[0]) / 8));
+  for (let i = fz[0]; i <= fz[1]; i += fstep) {
+    const dt = dates[i] ? dates[i].slice(5) : ("+" + (i + 1));
+    fctx.fillText(dt, xF(i), H - padB + 18);
+  }
 }
 
 // 固定参考线（单击设置，最多一条；仅当前视图匹配时绘制）
@@ -1463,6 +1489,8 @@ function showPinTip(v) {
   const pin = window._pin;
   if (!pin || pin.view !== v || !D || !n || pin.i == null) { tip.style.display = "none"; return; }
   const i = pin.i;
+  // 放大模式下固定点不在可见范围内时隐藏窗口（避免定位到画布外）
+  if (ZOOM && (i < ZOOM.i0 || i > ZOOM.i1)) { tip.style.display = "none"; return; }
   tip.innerHTML = tipContentFor(v, i);
   const zooming = document.getElementById("zoomOverlay").style.display === "flex";
   const cvs = v === "future" ? fcv : cv;
@@ -1560,6 +1588,38 @@ function exitZoom() {
   document.getElementById("zoomCanvas").style.cursor = "";
 }
 
+// 放大模式当前视图的 y 轴范围（与各绘制函数内部一致，用于 clip 外画坐标轴标签）
+function zoomYRange() {
+  if (view === "future") {
+    const lastClose = D.closes[D.closes.length - 1];
+    let lo = lastClose, hi = lastClose;
+    for (const k of FIT_ORDER) {
+      const mo = D.fit && D.fit[k];
+      if (!mo || !mo.predict) continue;
+      for (const v of mo.predict) {
+        if (v == null) continue;
+        lo = Math.min(lo, v); hi = Math.max(hi, v);
+      }
+    }
+    const pad = (hi - lo) * 0.15 || 1;
+    return [lo - pad, hi + pad];
+  }
+  if (view === "fit") {
+    let all = [...D.closes];
+    if (D.fit) for (const k of FIT_ORDER) if (D.fit[k]) all = all.concat(D.fit[k].values.filter(v => v != null));
+    return seriesMinMax(all, 0.06);
+  }
+  if (currentType === "kline") return priceMinMax();
+  if (currentType === "ma5") return seriesMinMax([...D.closes, ...D.ma5.filter(v => v != null)], 0.06);
+  if (currentType === "boll") {
+    const vals = [...D.boll_up.filter(v => v != null), ...D.boll_low.filter(v => v != null)];
+    return seriesMinMax(vals, 0.05);
+  }
+  if (currentType === "vol") return seriesMinMax(D.vols, 0.05);
+  const [mn, mx] = seriesMinMax(D.changes, 0.15);
+  return [Math.min(mn, 0), Math.max(mx, 0)];
+}
+
 function drawZoomCanvas() {
   const zc = document.getElementById("zoomCanvas");
   const zctx = zc.getContext("2d");
@@ -1578,6 +1638,10 @@ function drawZoomCanvas() {
   // 临时把全局绘制目标切到放大画布（坐标系已缩放为 W×H），复用原绘制函数
   const saveCtx = ctx, saveFctx = fctx;
   ctx = zctx; fctx = zctx;
+  // 分层：clip 外先画坐标轴标签（保证放大后刻度/日期始终可见），clip 内只画数据
+  const [ymn, ymx] = zoomYRange();
+  if (view === "future") drawFutureAxisLabels(ymn, ymx);
+  else drawAxisLabels(ymn, ymx, 5);
   zctx.save();
   // 坐标轴边界：裁剪到绘图区，放大/拖拽时图像不超出坐标轴
   if (view === "future") {
@@ -1654,6 +1718,7 @@ function drawZoomCrosshair(fi) {
       i0 = Math.max(0, Math.min(total - span, i0));
       ZOOM.i0 = i0; ZOOM.i1 = i0 + span;
       drawZoomCanvas();
+      if (window._pin && window._pin.view === view) showPinTip(view);  // 固定窗口随图像移动
       _zoomDrag.moved = true;
       return;
     }
@@ -1708,6 +1773,7 @@ function drawZoomCrosshair(fi) {
     ZOOM.i0 = i0;
     ZOOM.i1 = i0 + newSpan;
     drawZoomCanvas();
+    if (window._pin && window._pin.view === view) showPinTip(view);  // 固定窗口随缩放位置更新
   }, {passive: false});
 
   // 左键按下拖拽平移
@@ -1752,8 +1818,21 @@ document.addEventListener("click", e => {
   });
   window.addEventListener("mousemove", e => {
     if (!drag) return;
-    tip.style.left = (drag.left + (e.clientX - drag.startX)) + "px";
-    tip.style.top = (drag.top + (e.clientY - drag.startY)) + "px";
+    let nx = drag.left + (e.clientX - drag.startX);
+    let ny = drag.top + (e.clientY - drag.startY);
+    // 碰到图表边界即停止移动：限制在图表（放大画布/主画布）范围内
+    const zooming = document.getElementById("zoomOverlay").style.display === "flex";
+    const boundEl = zooming ? document.getElementById("zoomCanvas") : cv;
+    const b = boundEl.getBoundingClientRect();
+    if (zooming) {
+      nx = Math.max(b.left + 4, Math.min(b.right - tip.offsetWidth - 4, nx));
+      ny = Math.max(b.top + 4, Math.min(b.bottom - tip.offsetHeight - 4, ny));
+    } else {
+      nx = Math.max(b.left + window.scrollX + 4, Math.min(b.right + window.scrollX - tip.offsetWidth - 4, nx));
+      ny = Math.max(b.top + window.scrollY + 4, Math.min(b.bottom + window.scrollY - tip.offsetHeight - 4, ny));
+    }
+    tip.style.left = nx + "px";
+    tip.style.top = ny + "px";
   });
   window.addEventListener("mouseup", () => { drag = null; });
 })();

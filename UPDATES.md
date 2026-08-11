@@ -1,5 +1,25 @@
 # 更新报告
 
+## v0.10.7 (2026-08-11)
+- 修复放大后坐标轴消失（用户报告，clip 把轴标签也裁掉了）：
+  - 根因：drawZoomCanvas 的 clip 裁剪到绘图区，y 轴刻度（x=PAD.L-8）与
+    x 轴日期（y=H-PAD.B+18）都在 clip 外被裁
+  - 修复：分层绘制——drawAxes 拆分出 drawAxisLabels，drawFuture 拆分出
+    drawFutureAxisLabels；drawZoomCanvas 先在 clip 外画坐标轴标签
+    （y 范围由 zoomYRange 与各绘制函数一致计算），再 clip 内画数据；
+    普通模式走原 drawAxes 不受影响
+- 放大后固定直线/窗口随图像移动（用户要求）：
+  - 固定直线本就随 ZOOM 重绘跟随；补上 pinTip：拖拽平移与滚轮缩放后
+    重新 showPinTip 定位；固定点移出可见范围时隐藏窗口
+- 固定窗口拖动碰到图表边界即停止（用户要求）：
+  - pinTip 拖动 mousemove 限制在图表边界内（放大模式 zoomCanvas，
+    普通模式主画布；放大模式视口坐标，普通模式文档坐标加 scroll 偏移）
+- 验证（Edge CDP，40 天模拟数据）：
+  - 放大后 y 轴刻度区 77 像素、x 轴日期区 375 像素（坐标轴可见）
+  - 锁定 pin.i=24 → 右拖 80px（ZOOM {10,39}→{6,35}）→ pinTip 381.8→469.4 跟随
+  - 拖 pinTip 到画布外 → 位置被限制在边界内
+  - 无 JS 错误；静态 18 项断言全过
+
 ## v0.10.6 (2026-08-11)
 - 放大/拖拽时图像不再超出坐标轴（用户要求）：
   - drawZoomCanvas 绘制前对绘图区做 clip 裁剪：
