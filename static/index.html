@@ -1405,6 +1405,7 @@ let _lastQuoteTs = null;  // 最近一次实时行情刷新时间（时间戳显
 let _wlMode = "list";     // 自选股显示模式：list=列表 / grid=热力图
 let _aiCache = {};        // AI 解读缓存：secid_周期 → 文本（localStorage 持久化）
 let _aiPanelOpen = false; // AI 窗口开关状态：点击打开/再点关闭（缓存保留）
+let _aiReqToken = 0;      // AI 请求序号：防止连续切换股票时旧响应覆盖新面板
 try { _aiCache = JSON.parse(localStorage.getItem("aiCache") || "{}"); } catch (e) { _aiCache = {}; }
 function saveAiCache() { try { localStorage.setItem("aiCache", JSON.stringify(_aiCache)); } catch (e) {} }
 function aiCacheKey() { return _curSecid + "_" + (document.getElementById("chartPeriod").value || "day"); }
@@ -1471,16 +1472,11 @@ function setChartData(data, name, secid) {
   showPinTip(view);
   refreshAllQuotes();
   startQuoteTimer();
-  // AI 解读面板：窗口开着时切换股票只换内容（有缓存显示/无缓存占位），关着则保持隐藏
+  // AI 解读面板：窗口开着时切换股票自动解读（有缓存立即显示，无缓存直接请求）
   const aiPanel = document.getElementById("aiPanel");
   if (_aiPanelOpen) {
     aiPanel.style.display = "block";
-    const aiText = _aiCache[aiCacheKey()];
-    if (aiText) {
-      aiPanel.innerHTML = "<div class='ai-title'>✨ AI 技术解读 · " + (_curName || "") + "</div>" + aiText;
-    } else {
-      aiPanel.innerHTML = "<div class='ai-title'>✨ AI 技术解读 · " + (_curName || "") + "</div><div style='color:#9ca3af'>暂无该股票的解读，点击 ✨ AI 解读 生成</div>";
-    }
+    requestAiInsight();
   } else {
     aiPanel.style.display = "none";
   }
@@ -1722,24 +1718,12 @@ document.getElementById("chartPeriod").addEventListener("change", e => {
   setStatus("切换周期，重新下载数据...");
   doKlineSecid(secid, _curName, e.target.value);
 });
-document.getElementById("aiBtn").addEventListener("click", async () => {
+// 发起 AI 解读：有缓存立即显示，无缓存请求并保存（带请求序号防串号）
+async function requestAiInsight() {
   const panel = document.getElementById("aiPanel");
-  // 开关：已打开 → 关闭窗口（缓存内容保留，重新打开立即显示）
-  if (_aiPanelOpen) {
-    _aiPanelOpen = false;
-    panel.style.display = "none";
-    return;
-  }
-  // 打开窗口
-  _aiPanelOpen = true;
-  panel.style.display = "block";
-  if (!D || !n) {
-    panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读</div><div style='color:#9ca3af'>请先查询股票再使用 AI 解读</div>";
-    return;
-  }
   const secid = _curSecid;
   const ck = aiCacheKey();
-  // 缓存命中：立即显示已保存的解读，不重复请求
+  const myToken = ++_aiReqToken;
   if (_aiCache[ck]) {
     panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读 · " + (_curName || "") + "</div>" + _aiCache[ck];
     return;
@@ -1754,6 +1738,7 @@ document.getElementById("aiBtn").addEventListener("click", async () => {
     const resp = await fetch("/api/insight?secid=" + encodeURIComponent(secid || "") +
                              "&name=" + encodeURIComponent(_curName || "") +
                              "&recent=" + encodeURIComponent(JSON.stringify(recent)));
+    if (myToken !== _aiReqToken) return;  // 已切到其他股票，丢弃过期响应
     const data = await resp.json();
     if (data.error) panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读</div><div style='color:#c0392b'>" + data.error + "</div>";
     else {
@@ -1762,8 +1747,27 @@ document.getElementById("aiBtn").addEventListener("click", async () => {
       panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读 · " + (_curName || "") + "</div>" + data.text.replace(/\n/g, "<br>");
     }
   } catch (e) {
+    if (myToken !== _aiReqToken) return;
     panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读</div><div style='color:#c0392b'>请求失败: " + e + "</div>";
   }
+}
+
+document.getElementById("aiBtn").addEventListener("click", () => {
+  const panel = document.getElementById("aiPanel");
+  const ck = aiCacheKey();
+  // 窗口开着且当前股票已有解读 → 关闭（开关）；其他情况点击 = 打开并触发解读
+  if (_aiPanelOpen && _aiCache[ck]) {
+    _aiPanelOpen = false;
+    panel.style.display = "none";
+    return;
+  }
+  _aiPanelOpen = true;
+  panel.style.display = "block";
+  if (!D || !n) {
+    panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读</div><div style='color:#9ca3af'>请先查询股票再使用 AI 解读</div>";
+    return;
+  }
+  requestAiInsight();
 });
 // ---- 多股归一化对比 ----
 const CMP_COLORS = ["#2563eb", "#dc2626", "#16a34a", "#f59e0b", "#8b5cf6", "#06b6d4", "#e11d48", "#7c3aed"];
