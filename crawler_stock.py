@@ -907,7 +907,8 @@ function seriesMinMax(arr, padRatio) {
 }
 // ---- 全屏放大状态（双击图表进入；滚轮缩放横轴、左键拖拽平移）----
 let ZOOM = null;       // null=普通模式；{i0, i1}=放大模式可见天数索引范围
-let _zoomDrag = null;  // 拖拽平移状态 {startX, i0, i1, moved}
+let _zoomDrag = null;  // 拖拽平移状态 {startX, startY, i0, i1, panY, moved}
+let _zoomPanY = 0;     // 放大模式纵轴平移量（W×H 坐标系像素，向下为正）
 
 // 可见天数索引范围（普通模式返回全年）
 function zRange() {
@@ -1549,14 +1550,16 @@ function enterZoom() {
   if (!D || !n) return;
   const total = zoomTotalIdx();
   ZOOM = {i0: 0, i1: total};
+  _zoomPanY = 0;
   document.getElementById("zoomOverlay").style.display = "flex";
   drawZoomCanvas();
-  setStatus("放大模式：滚轮缩放横轴，左键拖拽平移，单击锁定参考线，右上角 ✕ 关闭");
+  setStatus("放大模式：滚轮缩放横轴，左键拖拽平移（左右/上下），单击锁定参考线，右上角 ✕ 关闭");
 }
 
 function exitZoom() {
   ZOOM = null;
   _zoomDrag = null;
+  _zoomPanY = 0;
   window._pin = null;  // 退出放大同时清除锁定参考线
   document.getElementById("zoomOverlay").style.display = "none";
   document.getElementById("pinTip").style.display = "none";
@@ -1578,6 +1581,7 @@ function drawZoomCanvas() {
   zctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   zctx.clearRect(0, 0, fw, fh);
   zctx.scale(rw / W, rh / H);
+  zctx.translate(0, _zoomPanY);  // 纵轴平移（拖拽上下移动）
   // 临时把全局绘制目标切到放大画布（坐标系已缩放为 W×H），复用原绘制函数
   const saveCtx = ctx, saveFctx = fctx;
   ctx = zctx; fctx = zctx;
@@ -1612,6 +1616,7 @@ function drawZoomCrosshair(fi) {
   const rect = zc.getBoundingClientRect();
   zctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   zctx.scale(rect.width / W, rect.height / H);
+  zctx.translate(0, _zoomPanY);  // 与绘制变换一致，十字线跟随纵轴平移
   zctx.strokeStyle = "rgba(0,0,0,0.35)"; zctx.setLineDash([4,4]); zctx.lineWidth = 1;
   const span = Math.max(1, ZOOM.i1 - ZOOM.i0);
   if (view === "future") {
@@ -1637,12 +1642,17 @@ function drawZoomCrosshair(fi) {
     if (_zoomDrag) {
       const rect = zc.getBoundingClientRect();
       const dx = (e.clientX - _zoomDrag.startX) * (W / rect.width);
+      const dy = (e.clientY - _zoomDrag.startY) * (H / rect.height);
+      // 横轴平移
       const span = _zoomDrag.i1 - _zoomDrag.i0;
       const dIdx = Math.round(-dx * span / (W - PAD.L - PAD.R));
       const total = zoomTotalIdx();
       let i0 = _zoomDrag.i0 + dIdx;
       i0 = Math.max(0, Math.min(total - span, i0));
       ZOOM.i0 = i0; ZOOM.i1 = i0 + span;
+      // 纵轴平移（限制在绘图区内，防止完全移出画布）
+      const maxPan = H - PAD.T - PAD.B;
+      _zoomPanY = Math.max(-maxPan, Math.min(maxPan, _zoomDrag.panY + dy));
       drawZoomCanvas();
       _zoomDrag.moved = true;
       return;
@@ -1703,7 +1713,7 @@ function drawZoomCrosshair(fi) {
   // 左键按下拖拽平移
   zc.addEventListener("mousedown", e => {
     if (!ZOOM || e.button !== 0) return;
-    _zoomDrag = {startX: e.clientX, i0: ZOOM.i0, i1: ZOOM.i1, moved: false};
+    _zoomDrag = {startX: e.clientX, startY: e.clientY, i0: ZOOM.i0, i1: ZOOM.i1, panY: _zoomPanY, moved: false};
     zc.style.cursor = "grabbing";
   });
   window.addEventListener("mouseup", () => {
@@ -1823,6 +1833,9 @@ function setChartData(data, name, secid) {
     (data.name || name) + " | " + D.dates[0] + " ~ " + D.dates[n-1] + " | 共 " + n + " 个交易日";
   // 注意：不清空 candidateBox——候选选项在加入自选股/重新搜索前保持显示，避免闪烁消失
   setStatus("完成");
+  // 标题涨跌幅零延迟：立即用自选股列表已有数据同步（_watchQuotes 缓存），
+  // 不等网络请求返回——数据更新刷新是自选股列表的事，标题只做直接显示
+  syncTitleFromWatch();
   // 按当前视图完整重绘：仅 paint 只更新行情图，模型拟合/未来预测视图的
   // 画布与右侧面板都需同步重渲染（否则点击自选股切换时图和数据不更新）
   window._pin = null;  // 切换股票后旧固定参考线失效，清除
