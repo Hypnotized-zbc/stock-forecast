@@ -390,13 +390,17 @@ def _quote_eastmoney(secid):
     }
     data = get_json(url, params, retries=2)  # 行情类接口快速失败，尽早切换备用源
     d = data.get("data") or {}
-    if not d or d.get("f43") is None:
+    try:
+        price = float(d.get("f43"))
+    except (TypeError, ValueError):
+        return None
+    if not price or price <= 0:  # 无效行情返回 None，前端走备用源/不显示
         return None
     return {
         "secid": secid,
         "name": d.get("f58"),
         "code": d.get("f57"),
-        "price": d.get("f43"),
+        "price": price,
         "prev_close": d.get("f60"),
         "change_pct": d.get("f170"),
         "volume": d.get("f47"),
@@ -430,6 +434,8 @@ def _quote_sina(secid):
         price = float(parts[3])
     except (ValueError, IndexError):
         return None
+    if not price or price <= 0:
+        return None
     return {
         "secid": secid,
         "name": parts[0],
@@ -459,13 +465,17 @@ def fetch_quotes(secids):
         diff = (data.get("data") or {}).get("diff") or []
         out = []
         for it in diff:
-            if it.get("f2") is None:
+            try:
+                price = float(it.get("f2"))
+            except (TypeError, ValueError):
+                continue
+            if not price or price <= 0:  # 无效行情（停牌/接口返回0）不输出，避免前端显示 000
                 continue
             out.append({
                 "secid": ("1." if it.get("f13") == 1 else "0.") + str(it.get("f12")),
                 "name": it.get("f14"),
                 "code": str(it.get("f12")),
-                "price": it.get("f2"),
+                "price": price,
                 "prev_close": it.get("f18"),
                 "change_pct": it.get("f3"),
                 "volume": it.get("f5"),
@@ -760,6 +770,8 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   .wl-bar { max-width: 1180px; margin: 8px auto 0; background: #fff; border-radius: 10px;
             box-shadow: 0 2px 8px rgba(0,0,0,.06); padding: 10px 14px; }
   .wl-head { font-size: 13px; color: #999; margin-bottom: 6px; }
+  .wl-head-row { color: #999; font-size: 12px; cursor: default; padding-top: 4px; padding-bottom: 4px; }
+  .wl-head-row:hover { background: transparent; }
   .wl-row { display: flex; align-items: center; gap: 14px; padding: 7px 4px;
             border-top: 1px solid #f0f0f0; cursor: pointer; font-size: 13px; }
   .wl-row:first-of-type { border-top: none; }
@@ -778,9 +790,13 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   .wl-x:hover { color: #dc2626; }
   .wl-empty { color: #bbb; font-size: 13px; padding: 4px 2px; }
   #status { font-size: 13px; color: #888; margin-left: 6px; }
-  .row2 { max-width: 1180px; margin: 10px auto 0; display: flex; align-items: center; gap: 16px; }
+  .row2 { max-width: 1180px; margin: 10px auto 0; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
   select { padding: 7px 12px; font-size: 14px; border: 1px solid #ccc; border-radius: 6px; background: #fff; }
   .sub { color: #888; font-size: 13px; }
+  .cur-stock { font-size: 22px; font-weight: 700; color: #111827; }
+  .cur-stock .code { font-size: 14px; font-weight: 400; color: #999; margin-left: 6px; }
+  .cur-stock .chg { font-size: 15px; font-weight: 600; margin-left: 12px; }
+  .cur-stock .cur-none { font-size: 14px; font-weight: 400; color: #bbb; }
   .wrap { max-width: 1180px; margin: 10px auto 0; background: #fff; border-radius: 10px;
           box-shadow: 0 2px 8px rgba(0,0,0,.06); padding: 12px;
           display: flex; gap: 14px; align-items: flex-start; }
@@ -813,6 +829,7 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
   <button class="tab" id="tabFuture">未来预测</button>
 </div>
 <div class="row2" id="chartControls">
+  <span class="cur-stock" id="curStock"><span class="cur-none">尚未查询股票</span></span>
   <select id="chartType">
     <option value="kline">K线图（蜡烛图）</option>
     <option value="ma5">5日均线图</option>
@@ -1499,8 +1516,8 @@ let _watchQuotes = {};
 let _watch = [];
 try { _watch = JSON.parse(localStorage.getItem("wl") || "[]"); } catch (e) { _watch = []; }
 
-function fmtVol(v) { if (v==null) return "—"; if (v>=1e8) return (v/1e8).toFixed(2)+"亿手"; if (v>=1e4) return (v/1e4).toFixed(2)+"万手"; return v+"手"; }
-function fmtAmount(v) { if (v==null) return "—"; if (v>=1e8) return (v/1e8).toFixed(2)+"亿"; if (v>=1e4) return (v/1e4).toFixed(2)+"万"; return v; }
+function fmtVol(v) { if (v==null || !(v>0)) return "—"; if (v>=1e8) return (v/1e8).toFixed(2)+"亿手"; if (v>=1e4) return (v/1e4).toFixed(2)+"万手"; return v+"手"; }
+function fmtAmount(v) { if (v==null || !(v>0)) return "—"; if (v>=1e8) return (v/1e8).toFixed(2)+"亿"; if (v>=1e4) return (v/1e4).toFixed(2)+"万"; return v; }
 function fmtShares(v) { if (v==null) return "—"; if (v>=1e8) return (v/1e8).toFixed(2)+"亿股"; return v; }
 
 async function refreshAllQuotes() {
@@ -1531,6 +1548,17 @@ function startQuoteTimer() {
 function setChartData(data, name, secid) {
   D = data;
   n = D.dates.length;
+  // 当前查询股票醒目标题：名称 + 代码 + 最新涨跌幅（红涨绿跌）
+  const code = String(secid || "").split(".")[1] || "";
+  const lc = D.changes && D.changes.length ? D.changes[n-1] : null;
+  let chgHtml = "";
+  if (lc != null && !isNaN(lc)) {
+    const up = lc >= 0;
+    chgHtml = "<span class='chg' style='color:" + (up ? UP : DOWN) + "'>" +
+              (up ? "+" : "") + lc.toFixed(2) + "%</span>";
+  }
+  document.getElementById("curStock").innerHTML =
+    (data.name || name) + "<span class='code'>" + code + "</span>" + chgHtml;
   document.getElementById("rangeInfo").textContent =
     (data.name || name) + " | " + D.dates[0] + " ~ " + D.dates[n-1] + " | 共 " + n + " 个交易日";
   document.getElementById("candidateBox").innerHTML = "";
@@ -1544,7 +1572,19 @@ function saveWatch() { try { localStorage.setItem("wl", JSON.stringify(_watch));
 function renderWatchlist() {
   const bar = document.getElementById("watchlist");
   if (!_watch.length) { bar.innerHTML = "<div class='wl-empty'>自选股（查询候选旁点 ＋ 添加）</div>"; return; }
-  bar.innerHTML = "<div class='wl-head'>自选股实时行情（每30秒统一刷新）</div>" + _watch.map(w =>
+  bar.innerHTML = "<div class='wl-head'>自选股实时行情（每30秒统一刷新）</div>" +
+    "<div class='wl-row wl-head-row'>" +
+      "<span class='wl-name'>名称</span>" +
+      "<span class='wl-price'>最新价</span>" +
+      "<span class='wl-chg'>涨跌幅</span>" +
+      "<span class='wl-prev'>昨收</span>" +
+      "<span class='wl-vol'>成交量</span>" +
+      "<span class='wl-amt'>成交额</span>" +
+      "<span class='wl-pe'>PE</span>" +
+      "<span class='wl-pb'>PB</span>" +
+      "<span class='wl-cap'>总市值</span>" +
+      "<span class='wl-x'></span>" +
+    "</div>" + _watch.map(w =>
     "<div class='wl-row' data-secid='"+w.secid+"'>" +
       "<span class='wl-name'>"+w.name+" <b>"+w.code+"</b></span>" +
       "<span class='wl-price' style='color:#999'>正在查询数据</span>" +
@@ -1560,15 +1600,17 @@ function renderWatchlist() {
 function renderWatchQuotes(map) {
   for (const row of document.querySelectorAll(".wl-row")) {
     const q = map[row.dataset.secid];
-    if (!q || q.price == null) continue;
+    // 无效行情（无数据/价格为0）不渲染，保持"正在查询数据"，避免显示 000
+    if (!q || q.price == null || !(q.price > 0)) continue;
     const up = q.change_pct >= 0;
     const color = up ? UP : DOWN;
     const set = (cls, txt) => { const el = row.querySelector("."+cls); if (el) el.textContent = txt; };
     const pr = row.querySelector(".wl-price");
     if (pr) { pr.textContent = q.price.toFixed(2); pr.style.color = color; }
     const cg = row.querySelector(".wl-chg");
-    if (cg) { cg.textContent = (up?"+":"")+q.change_pct.toFixed(2)+"%"; cg.style.color = color; }
-    set("wl-prev", q.prev_close!=null ? q.prev_close.toFixed(2) : "—");
+    if (cg) { cg.textContent = (q.change_pct != null && !isNaN(q.change_pct))
+        ? (up?"+":"")+q.change_pct.toFixed(2)+"%" : "—"; cg.style.color = color; }
+    set("wl-prev", q.prev_close>0 ? q.prev_close.toFixed(2) : "—");
     set("wl-vol", fmtVol(q.volume));
     set("wl-amt", fmtAmount(q.amount));
     set("wl-pe", q.pe!=null ? q.pe.toFixed(2) : "—");
@@ -1685,7 +1727,7 @@ document.getElementById("candidateBox").addEventListener("click", e => {
 });
 document.getElementById("watchlist").addEventListener("click", e => {
   const rm = e.target.closest(".wl-x");
-  if (rm) { removeWatch(rm.dataset.rm); return; }
+  if (rm && rm.dataset.rm) { removeWatch(rm.dataset.rm); return; }
   const row = e.target.closest(".wl-row");
   if (row) {
     const w = _watch.find(x => x.secid === row.dataset.secid);
