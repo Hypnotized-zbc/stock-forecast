@@ -1565,7 +1565,13 @@ function setChartData(data, name, secid) {
     (data.name || name) + " | " + D.dates[0] + " ~ " + D.dates[n-1] + " | 共 " + n + " 个交易日";
   // 注意：不清空 candidateBox——候选选项在加入自选股/重新搜索前保持显示，避免闪烁消失
   setStatus("完成");
-  paint(currentType);
+  // 按当前视图完整重绘：仅 paint 只更新行情图，模型拟合/未来预测视图的
+  // 画布与右侧面板都需同步重渲染（否则点击自选股切换时图和数据不更新）
+  window._pin = null;  // 切换股票后旧固定参考线失效，清除
+  if (view === "fit") { renderFitPanel(); drawFit(); }
+  else if (view === "future") { renderFuturePanel(); drawFuture(); }
+  else paint(currentType);
+  showPinTip(view);
   refreshAllQuotes();
   startQuoteTimer();
 }

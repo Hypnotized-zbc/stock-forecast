@@ -1,5 +1,20 @@
 # 更新报告
 
+## v0.9.11 (2026-08-11)
+- 修复未来预测模块点击自选股不切换（用户报告）：
+  - 根因：setChartData 切换股票后只调 paint(currentType) 重绘行情画布——
+    future 视图下 futureChart 与 futurePanel 不重渲染，仍显示旧股票数据；
+    fit 视图下指标面板同样不刷新（画布靠鼠标移动触发 drawFit 兜底才更新）
+  - 修复：setChartData 末尾按当前视图分支完整重绘——fit 视图
+    renderFitPanel+drawFit，future 视图 renderFuturePanel+drawFuture，
+    chart 视图 paint(currentType)；同时清除失效固定参考线（window._pin）
+- 验证（Edge CDP，模拟双股数据注入 localStorage 缓存）：
+  - future 视图点击中国神华 → D 切到神华、面板显示 44.x 预测值、
+    无茅台 131x 残留
+  - fit 视图点击贵州茅台 → D 切到茅台、面板 MAE/RMSE 渲染、
+    画布绘制 20174 像素
+  - chart 视图点击切换正常、无 JS 错误
+
 ## v0.9.10 (2026-08-11)
 - 修复当前股标题涨跌幅与自选股列表数值不一致（用户实测报告"依旧不同"）：
   - 根因：标题此前用 K线最后交易日涨跌幅兜底（数据源滞后/盘中时是昨天或上一交易日
