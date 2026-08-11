@@ -1,5 +1,15 @@
 # 更新报告
 
+## v0.12.1 (2026-08-11)
+- AI 解读接入 deepseek-v4-flash（用户指定模型配置）：
+  - backend.py 新增 LLM_MODEL="deepseek-v4-flash"、LLM_BASE_URL="https://api.deepseek.com/v1"
+    （OpenAI 兼容格式，可在常量处调整）
+  - 请求地址改为 {base_url}/chat/completions，model 用 LLM_MODEL
+  - API Key 写入项目 llm_key.txt，.gitignore 增加忽略——公开仓库不泄露
+- 验证（真实调用）：
+  - 20 日 mock 行情 → /api/insight → 返回完整中文解读
+    （上升趋势/压力位 47.6/支撑 45.0/双顶风险提示），模型 deepseek-v4-flash
+
 ## v0.12.0 (2026-08-11) 大版本：代码拆分 + 指标三件套 + 周期切换 + AI 解读 + 多股对比 + 分享卡片 + 热力图
 
 ### 一、代码结构优化（用户要求）

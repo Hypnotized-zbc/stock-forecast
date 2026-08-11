@@ -826,6 +826,10 @@ def compute_fits(closes, dates=None, horizon=10):
 
 _AI_KEY = None
 
+# DeepSeek 接入配置（OpenAI 兼容格式）：模型与 base_url 可在此调整
+LLM_MODEL = "deepseek-v4-flash"
+LLM_BASE_URL = "https://api.deepseek.com/v1"
+
 
 def _get_ai_key():
     """DeepSeek API Key：环境变量 DEEPSEEK_API_KEY 或项目目录 llm_key.txt。"""
@@ -859,9 +863,9 @@ def ai_insight(secid, name, recent):
     )
     try:
         resp = _SESSION.post(
-            "https://api.deepseek.com/chat/completions",
+            f"{LLM_BASE_URL.rstrip('/')}/chat/completions",
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={"model": "deepseek-chat",
+            json={"model": LLM_MODEL,
                   "messages": [{"role": "user", "content": prompt}],
                   "temperature": 0.6, "max_tokens": 400},
             timeout=30,
