@@ -1554,17 +1554,13 @@ function setChartData(data, name, secid) {
   n = D.dates.length;
   _curSecid = secid;
   // 当前查询股票醒目标题：名称 + 代码 + 涨跌幅（红涨绿跌）
-  // 先用K线最后交易日涨跌幅兜底，随后 refreshAllQuotes 用同一批量接口刷新（与自选股一致）
+  // 涨跌幅不再用K线兜底——完全由 refreshAllQuotes 的实时批量行情驱动，
+  // 与自选股列表同一份数据（同一接口、同一时刻），保证两处数值绝对一致；
+  // 实时数据未返回时显示 —，不展示与自选股不同源的旧值
   const code = String(secid || "").split(".")[1] || "";
-  const lc = D.changes && D.changes.length ? D.changes[n-1] : null;
-  let chgHtml = "";
-  if (lc != null && !isNaN(lc)) {
-    const up = lc >= 0;
-    chgHtml = "<span class='chg' style='color:" + (up ? UP : DOWN) + "'>" +
-              (up ? "+" : "") + lc.toFixed(2) + "%</span>";
-  }
   document.getElementById("curStock").innerHTML =
-    (data.name || name) + "<span class='code'>" + code + "</span>" + chgHtml;
+    (data.name || name) + "<span class='code'>" + code + "</span>" +
+    "<span class='chg' style='color:#bbb;font-weight:400'>—</span>";
   document.getElementById("rangeInfo").textContent =
     (data.name || name) + " | " + D.dates[0] + " ~ " + D.dates[n-1] + " | 共 " + n + " 个交易日";
   // 注意：不清空 candidateBox——候选选项在加入自选股/重新搜索前保持显示，避免闪烁消失
@@ -1584,6 +1580,7 @@ function updateCurQuoteFrom(q) {
   const up = q.change_pct >= 0;
   el.textContent = (up ? "+" : "") + q.change_pct.toFixed(2) + "%";
   el.style.color = up ? UP : DOWN;
+  el.style.fontWeight = "600";  // 覆盖占位态的灰字浅重，恢复醒目样式
 }
 function renderWatchlist() {
   const bar = document.getElementById("watchlist");
@@ -1635,7 +1632,9 @@ function addWatch(secid, name, code) {
   _watch.push({secid: secid, name: name, code: code});
   saveWatch(); renderWatchlist();
   refreshAllQuotes();
-  setStatus("已加入自选: " + name);
+  setStatus("已加入自选: " + name + "，正在下载数据...");
+  // 加入自选后自动下载该股K线并打开图表（命中缓存秒开），无需再点候选
+  doKlineSecid(secid, name);
 }
 function removeWatch(secid) {
   _watch = _watch.filter(w => w.secid !== secid);
