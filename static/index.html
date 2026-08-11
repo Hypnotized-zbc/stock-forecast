@@ -153,7 +153,9 @@
 </div>
 <div class="row2" id="chartControls">
   <select id="chartType">
-    <option value="kline">K线图（蜡烛图）</option>
+    <option value="kline">日K线图（蜡烛图）</option>
+    <option value="kline-week">周K线图</option>
+    <option value="kline-month">月K线图</option>
     <option value="ma5">5日均线图</option>
     <option value="boll">布林带 BOLL 图</option>
     <option value="vol">成交量 VOL 图</option>
@@ -161,11 +163,6 @@
     <option value="macd">MACD 指标</option>
     <option value="kdj">KDJ 指标</option>
     <option value="rsi">RSI 指标</option>
-  </select>
-  <select id="chartPeriod">
-    <option value="day">日K</option>
-    <option value="week">周K</option>
-    <option value="month">月K</option>
   </select>
   <button id="aiBtn" style="margin-left:6px;padding:3px 12px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;font-size:13px">✨ AI 解读</button>
   <button id="cmpBtn" style="margin-left:6px;padding:3px 12px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;font-size:13px">⇄ 多股对比</button>
@@ -850,7 +847,7 @@ function paint(type) {
     ctx.fillText("请先在上方输入股票名称查询", W/2, H/2);
     return;
   }
-  if (type=="kline") drawKline();
+  if (type=="kline" || type=="kline-week" || type=="kline-month") drawKline();
   else if (type=="ma5") drawMA5();
   else if (type=="boll") drawBOLL();
   else if (type=="vol") drawVol();
@@ -1130,7 +1127,7 @@ function zoomYRange() {
     if (D.fit) for (const k of FIT_ORDER) if (D.fit[k]) all = all.concat(D.fit[k].values.filter(v => v != null));
     return seriesMinMax(all, 0.06);
   }
-  if (currentType === "kline") return priceMinMax();
+  if (currentType === "kline" || currentType === "kline-week" || currentType === "kline-month") return priceMinMax();
   if (currentType === "ma5") return seriesMinMax([...D.closes, ...D.ma5.filter(v => v != null)], 0.06);
   if (currentType === "boll") {
     const vals = [...D.boll_up.filter(v => v != null), ...D.boll_low.filter(v => v != null)];
@@ -1421,7 +1418,12 @@ let _aiPanelOpen = false; // AI 窗口开关状态：点击打开/再点关闭�
 let _aiReqToken = 0;      // AI 请求序号：防止连续切换股票时旧响应覆盖新面板
 try { _aiCache = JSON.parse(localStorage.getItem("aiCache") || "{}"); } catch (e) { _aiCache = {}; }
 function saveAiCache() { try { localStorage.setItem("aiCache", JSON.stringify(_aiCache)); } catch (e) {} }
-function aiCacheKey() { return _curSecid + "_" + (document.getElementById("chartPeriod").value || "day"); }
+function aiCacheKey() {
+  // 缓存按当前 K线周期区分（日K/周K/月K），指标图共用日K
+  const t = currentType;
+  const period = t === "kline-week" ? "week" : t === "kline-month" ? "month" : "day";
+  return _curSecid + "_" + period;
+}
 let _watch = [];
 try { _watch = JSON.parse(localStorage.getItem("wl") || "[]"); } catch (e) { _watch = []; }
 
@@ -1618,7 +1620,7 @@ function setKlineCache(secid, data, period) {
 
 async function doKline(idx) {
   const c = window._cands[idx];
-  const period = document.getElementById("chartPeriod").value || "day";
+  const period = "day";  // 搜索打开统一用日K（周期切换走图类型大类的本地聚合）
   const cached = getKlineCache(c.secid, period);
   if (cached) {
     setChartData(cached, c["名称"], c.secid);
@@ -1684,7 +1686,7 @@ function aggToPeriod(data, period) {
 }
 
 async function doKlineSecid(secid, name, period) {
-  period = period || document.getElementById("chartPeriod").value || "day";
+  period = period || "day";  // 周期切换走图类型大类的本地聚合，默认日K
   const periodLabel = {day: "日K", week: "周K", month: "月K"}[period] || period;
   const cached = getKlineCache(secid, period);
   if (cached) {
@@ -1775,19 +1777,44 @@ document.getElementById("watchlist").addEventListener("click", e => {
 document.getElementById("searchBtn").addEventListener("click", doSearch);document.getElementById("stockInput").addEventListener("keydown", e => {
   if (e.key === "Enter") doSearch();
 });
+// 图类型切换：日K/周K/月K 三大类走本地缓存/聚合（零延迟），指标图统一用日K数据
 document.getElementById("chartType").addEventListener("change", e => {
-  currentType = e.target.value;
-  // 周期选择（日K/周K/月K）仅在 K 线图模式显示
-  document.getElementById("chartPeriod").style.display = currentType === "kline" ? "" : "none";
-  paint(currentType);
+  const t = e.target.value;
+  currentType = t;
+  if (!D || !n) { paint(t); return; }
+  if (t === "kline" || t === "kline-week" || t === "kline-month") {
+    const period = t === "kline-week" ? "week" : t === "kline-month" ? "month" : "day";
+    switchPeriodData(period);
+  } else {
+    // 指标图：切回日K数据（指标完整），避免周K/月K聚合后指标为空
+    const dayCached = _curSecid ? getKlineCache(_curSecid, "day") : null;
+    if (dayCached && D !== dayCached) setChartData(dayCached, _curName, _curSecid);
+    else paint(t);
+  }
 });
-document.getElementById("chartPeriod").addEventListener("change", e => {
+
+// 切换 K线周期数据：缓存优先，无缓存则用日K前端聚合（毫秒级，零等待）
+function switchPeriodData(period) {
   const secid = _curSecid;
   if (!secid) return;
   if (ZOOM) exitZoom();
-  setStatus("切换周期，重新下载数据...");
-  doKlineSecid(secid, _curName, e.target.value);
-});
+  const label = {day: "日K", week: "周K", month: "月K"}[period] || period;
+  const cached = getKlineCache(secid, period);
+  if (cached) {
+    setChartData(cached, _curName, secid);
+    setStatus(_curName + " " + label + " 数据已加载（缓存）");
+    return;
+  }
+  const dayCached = getKlineCache(secid, "day");
+  const agg = dayCached ? aggToPeriod(dayCached, period) : null;
+  if (agg) {
+    setChartData(agg, _curName, secid);
+    setStatus(_curName + " " + label + "（前端聚合，零等待）");
+  } else {
+    setStatus("暂无日K缓存，请先打开日K线图");
+    paint("kline");
+  }
+}
 // AI 标题（含"重新生成"按钮，点击强制重新请求覆盖缓存）
 function aiTitleHtml() {
   return "<div class='ai-title' style='display:flex;align-items:center;gap:8px'>✨ AI 技术解读 · " + (_curName || "") +
@@ -1874,8 +1901,7 @@ function cmpCandidates() {
 }
 
 function cmpDataOf(secid) {
-  // 优先当前 D，否则从 localStorage 的日K缓存读取
-  if (_curSecid === secid && D && n) return D;
+  // 对比图固定用日K数据：只读日K缓存，不受当前 K线周期切换影响
   try {
     const keys = Object.keys(localStorage).filter(k => k.startsWith("kline_" + secid + "_day_"));
     if (!keys.length) return null;
