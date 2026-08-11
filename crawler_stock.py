@@ -906,6 +906,7 @@ function seriesMinMax(arr, padRatio) {
 // ---- 全屏放大状态（双击图表进入；滚轮缩放横轴、左键拖拽平移）----
 let ZOOM = null;       // null=普通模式；{i0, i1}=放大模式可见天数索引范围
 let _zoomDrag = null;  // 拖拽平移状态 {startX, i0, i1, moved}
+let _zoomSuppressClick = false;  // 拖拽结束后标记：随后的 click 不触发锁定
 
 // 可见天数索引范围（普通模式返回全年）
 function zRange() {
@@ -1577,12 +1578,25 @@ function drawZoomCanvas() {
   // 临时把全局绘制目标切到放大画布（坐标系已缩放为 W×H），复用原绘制函数
   const saveCtx = ctx, saveFctx = fctx;
   ctx = zctx; fctx = zctx;
+  zctx.save();
+  // 坐标轴边界：裁剪到绘图区，放大/拖拽时图像不超出坐标轴
+  if (view === "future") {
+    // future 顶部保留大标题（y=0 起不裁），x/底部按绘图区
+    zctx.beginPath();
+    zctx.rect(70, 0, W - 70 - 24, H - 46);
+    zctx.clip();
+  } else {
+    zctx.beginPath();
+    zctx.rect(PAD.L, PAD.T, W - PAD.L - PAD.R, H - PAD.T - PAD.B);
+    zctx.clip();
+  }
   try {
     if (view === "future") drawFuture();
     else if (view === "fit") drawFit();
     else paint(currentType);
     drawPinLine(view);
   } finally {
+    zctx.restore();
     ctx = saveCtx; fctx = saveFctx;
   }
 }
@@ -1666,10 +1680,10 @@ function drawZoomCrosshair(fi) {
     document.getElementById("futureTip").style.display = "none";
   });
 
-  // 单击锁定参考线（拖拽结束后不触发）
+  // 单击锁定参考线（拖拽结束后不触发：mouseup 已标记，click 消费后跳过）
   zc.addEventListener("click", e => {
     if (!ZOOM) return;
-    if (_zoomDrag && _zoomDrag.moved) { _zoomDrag = null; return; }
+    if (_zoomSuppressClick) { _zoomSuppressClick = false; return; }
     const fi = zoomIdxFromClientX(e.clientX);
     const i = Math.round(fi);
     if (i < ZOOM.i0 || i > ZOOM.i1) return;
@@ -1703,7 +1717,12 @@ function drawZoomCrosshair(fi) {
     zc.style.cursor = "grabbing";
   });
   window.addEventListener("mouseup", () => {
-    if (_zoomDrag) { _zoomDrag = null; zc.style.cursor = ""; }
+    if (_zoomDrag) {
+      const moved = _zoomDrag.moved;
+      _zoomDrag = null;
+      zc.style.cursor = "";
+      if (moved) _zoomSuppressClick = true;  // 刚拖拽过，随后的 click 不固定
+    }
   });
 })();
 

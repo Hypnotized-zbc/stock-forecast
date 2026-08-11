@@ -1,5 +1,22 @@
 # 更新报告
 
+## v0.10.6 (2026-08-11)
+- 放大/拖拽时图像不再超出坐标轴（用户要求）：
+  - drawZoomCanvas 绘制前对绘图区做 clip 裁剪：
+    chart/fit 裁剪 rect(PAD.L, PAD.T, W-PAD.L-PAD.R, H-PAD.T-PAD.B)；
+    future 顶部不裁（保留大标题），x/底部按绘图区
+  - 拖拽平移后部分蜡烛影线曾画入坐标轴外空白区，现被裁剪干净
+- 拖动图像时不触发固定直线/浮动窗口（用户要求，两种情况区分）：
+  - 根因：mouseup 先把 _zoomDrag 置 null，随后浏览器触发的 click 判断
+    _zoomDrag.moved 恒为 false，误执行锁定
+  - 修复：新增 _zoomSuppressClick——mouseup 时若拖拽过（moved）则标记，
+    click 消费该标记后跳过锁定；纯点击（未拖拽）不受影响
+- 验证（Edge CDP，40 天模拟数据）：
+  - 拖拽（右 200px）→ 松手后 click：window._pin 保持 null（不固定）；
+    _zoomSuppressClick 消费后 false；纯点击再固定 {view:chart, i:18}
+  - 拖拽到边界后绘图区左侧外像素数 = 0（clip 生效，无越界）
+  - 无 JS 错误；静态 17 项断言全过
+
 ## v0.10.5 (2026-08-11)
 - 删除放大时的上下移动功能（用户要求，定位根因后回退）：
   - 用户发现放大横轴同时纵轴也重算导致图像上下抖动
