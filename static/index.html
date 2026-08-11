@@ -1728,27 +1728,37 @@ async function requestAiInsight() {
     panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读 · " + (_curName || "") + "</div>" + _aiCache[ck];
     return;
   }
-  panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读 · " + (_curName || "") + "</div><div style='color:#9ca3af'>正在请求 DeepSeek，约 5~15 秒…</div>";
+  panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读 · " + (_curName || "") + "</div><div style='color:#9ca3af'>正在进行AI技术解读，大约需要5-10s…</div>";
   const recent = [];
   const start = Math.max(0, n - 20);
   for (let i = start; i < n; i++) {
     recent.push({d: D.dates[i], o: D.opens[i], c: D.closes[i], h: D.highs[i], l: D.lows[i], ch: D.changes[i]});
   }
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 60000);  // 60s 上限（后端含 3 次重试）
   try {
     const resp = await fetch("/api/insight?secid=" + encodeURIComponent(secid || "") +
                              "&name=" + encodeURIComponent(_curName || "") +
-                             "&recent=" + encodeURIComponent(JSON.stringify(recent)));
+                             "&recent=" + encodeURIComponent(JSON.stringify(recent)),
+                             {signal: ctrl.signal});
     if (myToken !== _aiReqToken) return;  // 已切到其他股票，丢弃过期响应
     const data = await resp.json();
     if (data.error) panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读</div><div style='color:#c0392b'>" + data.error + "</div>";
     else {
-      _aiCache[ck] = data.text;  // 保存解读，之后查看不再重复请求
+      const t = (data.text || "").trim();
+      if (!t) {
+        panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读</div><div style='color:#c0392b'>解读结果为空，请点击按钮重试</div>";
+        return;
+      }
+      _aiCache[ck] = t;  // 保存解读，之后查看不再重复请求
       saveAiCache();
-      panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读 · " + (_curName || "") + "</div>" + data.text.replace(/\n/g, "<br>");
+      panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读 · " + (_curName || "") + "</div>" + t.replace(/\n/g, "<br>");
     }
   } catch (e) {
     if (myToken !== _aiReqToken) return;
     panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读</div><div style='color:#c0392b'>请求失败: " + e + "</div>";
+  } finally {
+    clearTimeout(timer);
   }
 }
 

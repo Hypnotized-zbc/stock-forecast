@@ -862,17 +862,28 @@ def ai_insight(secid, name, recent):
         "量价特征、短期风险提示。不要推荐买卖，不要用表格。"
     )
     try:
-        resp = _SESSION.post(
-            f"{LLM_BASE_URL.rstrip('/')}/chat/completions",
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={"model": LLM_MODEL,
-                  "messages": [{"role": "user", "content": prompt}],
-                  "temperature": 0.6, "max_tokens": 400},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        text = resp.json()["choices"][0]["message"]["content"].strip()
-        return {"text": text}
+        last_err = None
+        for attempt in range(1, 4):  # 最多 3 次，指数退避，提高成功率
+            try:
+                resp = _SESSION.post(
+                    f"{LLM_BASE_URL.rstrip('/')}/chat/completions",
+                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                    json={"model": LLM_MODEL,
+                          "messages": [{"role": "user", "content": prompt}],
+                          "temperature": 0.6, "max_tokens": 400},
+                    timeout=20,
+                )
+                resp.raise_for_status()
+                text = resp.json()["choices"][0]["message"]["content"].strip()
+                if not text:
+                    raise ValueError("模型返回空内容，重试")  # DeepSeek 偶发空响应，走重试
+                return {"text": text}
+            except Exception as exc:
+                last_err = exc
+                print(f"[!] AI 请求失败(第{attempt}/3次): {exc}")
+                if attempt < 3:
+                    time.sleep(1.5 ** attempt)  # 2s, 3s
+        return {"error": f"AI 解读失败: {last_err}"}
     except Exception as exc:
         return {"error": f"AI 解读失败: {exc}"}
 
