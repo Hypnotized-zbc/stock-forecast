@@ -109,6 +109,15 @@
              max-width: 760px; width: 90%; max-height: 88vh; overflow: auto;
              box-shadow: 0 10px 40px rgba(0,0,0,.5); }
   .cmp-head { font-weight: 600; color: #111827; margin-bottom: 10px; font-size: 15px; }
+  .cmp-range { display: flex; align-items: center; gap: 8px; margin: 10px 0 6px;
+               font-size: 13px; color: #4b5563; flex-wrap: wrap; }
+  .cmp-range input[type="date"] { padding: 3px 6px; border: 1px solid #d1d5db;
+                                  border-radius: 6px; font-size: 13px; }
+  .cmp-range-tip { color: #9ca3af; font-size: 12px; }
+  .cmp-tip { position: absolute; background: rgba(255,255,255,.97); border: 1px solid #e5e7eb;
+             border-radius: 8px; padding: 6px 9px; font-size: 12px; line-height: 1.7;
+             box-shadow: 0 2px 10px rgba(0,0,0,.14); pointer-events: none; z-index: 5;
+             white-space: nowrap; }
   .cmp-list { max-height: 220px; overflow: auto; border: 1px solid #e5e7eb;
               border-radius: 8px; padding: 8px; }
   .cmp-item { display: flex; align-items: center; gap: 8px; padding: 5px 6px;
@@ -188,13 +197,23 @@
 </div>
 <div id="compareOverlay">
   <div class="cmp-box">
-    <div class="cmp-head">多股归一化对比（以各自首日收盘 = 100）</div>
+    <div class="cmp-head">多股归一化对比（以所选范围首日收盘 = 100）</div>
     <div class="cmp-list" id="cmpList"></div>
+    <div class="cmp-range">
+      <label>日期范围：</label>
+      <input type="date" id="cmpFrom">
+      <span>~</span>
+      <input type="date" id="cmpTo">
+      <span class="cmp-range-tip" id="cmpRangeTip"></span>
+    </div>
     <div style="text-align:center;margin:8px 0">
       <button id="cmpGo" style="padding:6px 18px;border:none;border-radius:6px;background:#2563eb;color:#fff;cursor:pointer">生成对比图</button>
       <button id="cmpClose" style="padding:6px 18px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;margin-left:8px">关闭</button>
     </div>
-    <canvas id="compareCanvas" style="display:none"></canvas>
+    <div style="position:relative">
+      <canvas id="compareCanvas" style="display:none"></canvas>
+      <div id="cmpTip" class="cmp-tip" style="display:none"></div>
+    </div>
   </div>
 </div>
 <script>
@@ -1804,16 +1823,24 @@ function cmpDataOf(secid) {
   } catch (e) { return null; }
 }
 
+let _cmpState = null;  // 对比图绘制上下文（纵线/浮窗用）
+
 function drawCompare() {
   const sel = [...document.querySelectorAll("#cmpList input:checked")].map(i => i.value);
   if (!sel.length) { setStatus("请至少选择一支股票"); return; }
-  const items = sel.map(secid => {
+  const from = document.getElementById("cmpFrom").value;
+  const to = document.getElementById("cmpTo").value;
+  // 日期范围过滤（默认最近 30 天，不超数据本身范围）
+  let items = sel.map(secid => {
     const d = cmpDataOf(secid);
     if (!d || !d.closes || !d.closes.length) return null;
-    const start = Math.max(0, d.closes.length - 30);
-    return {name: d.name || secid, closes: d.closes.slice(start), dates: d.dates.slice(start)};
+    let i0 = 0, i1 = d.closes.length - 1;
+    if (from) { while (i0 <= i1 && d.dates[i0] < from) i0++; }
+    if (to)   { while (i1 >= i0 && d.dates[i1] > to) i1--; }
+    if (i1 < i0) return null;
+    return {name: d.name || secid, closes: d.closes.slice(i0, i1 + 1), dates: d.dates.slice(i0, i1 + 1)};
   }).filter(Boolean);
-  if (items.length < 2) { setStatus("对比需要至少 2 支已下载数据的股票（先查询或加入自选股）"); return; }
+  if (items.length < 2) { setStatus("对比需要至少 2 支股票（所选日期范围内有数据）"); return; }
   const cv = document.getElementById("compareCanvas");
   cv.style.display = "block";
   const W2 = cv.parentElement.clientWidth - 40;
@@ -1828,7 +1855,7 @@ function drawCompare() {
   ctx.clearRect(0, 0, W2, H2);
   const padL = 56, padR = 16, padT = 14, padB = 30;
   const plotW = W2 - padL - padR, plotH = H2 - padT - padB;
-  // 归一化：以各自首日收盘 = 100
+  // 归一化：以所选范围首日收盘 = 100
   const series = items.map(it => {
     const base = it.closes[0] || 1;
     return {name: it.name, vals: it.closes.map(c => c / base * 100)};
@@ -1872,11 +1899,72 @@ function drawCompare() {
   ctx.fillStyle = "#888"; ctx.textAlign = "center";
   ctx.fillText(dts[0] || "", padL, H2 - 10);
   ctx.fillText(dts[dts.length - 1] || "", W2 - padR, H2 - 10);
+  // 保存状态供纵线/浮窗
+  _cmpState = {cv, W2, H2, padL, padR, padT, padB, plotW, plotH, lo, hi, xOf, yOf,
+               series, items, len: series[0].vals.length};
 }
+
+// 对比图鼠标纵线 + 小浮窗（显示各股票对应归一化值与涨跌幅）
+const cmpCanvas = document.getElementById("compareCanvas");
+cmpCanvas.addEventListener("mousemove", e => {
+  const st = _cmpState;
+  if (!st) return;
+  const rect = cmpCanvas.getBoundingClientRect();
+  const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  if (x < st.padL || x > st.W2 - st.padR || y < st.padT || y > st.H2 - st.padB) {
+    document.getElementById("cmpTip").style.display = "none";
+    return;
+  }
+  const xi = Math.max(0, Math.min(st.len - 1, Math.round((x - st.padL) / st.plotW * (st.len - 1))));
+  drawCompare();  // 重绘基础图
+  const c2 = cmpCanvas.getContext("2d");
+  c2.strokeStyle = "#94a3b8"; c2.lineWidth = 1;
+  c2.beginPath(); c2.moveTo(st.xOf(xi), st.padT); c2.lineTo(st.xOf(xi), st.H2 - st.padB); c2.stroke();
+  // 小浮窗：各股票数值
+  const tip = document.getElementById("cmpTip");
+  let html = "<div style='font-weight:600;margin-bottom:3px'>" + (st.items[0].dates[xi] || "") + "</div>";
+  st.series.forEach((s, k) => {
+    const v = s.vals[xi];
+    const chg = v - 100;
+    html += "<div style='color:" + CMP_COLORS[k % CMP_COLORS.length] + "'>" + s.name + " " + v.toFixed(2) +
+            " (<span style='color:" + (chg >= 0 ? UP : DOWN) + "'>" + (chg >= 0 ? "+" : "") + chg.toFixed(2) + "%</span>)</div>";
+  });
+  tip.innerHTML = html;
+  tip.style.display = "block";
+  const tipW = tip.offsetWidth, tipH = tip.offsetHeight;
+  let tx = x + 14, ty = y - tipH - 10;
+  if (tx + tipW > st.W2) tx = x - tipW - 14;
+  if (ty < 0) ty = y + 14;
+  tip.style.left = tx + "px";
+  tip.style.top = ty + "px";
+});
+cmpCanvas.addEventListener("mouseleave", () => {
+  document.getElementById("cmpTip").style.display = "none";
+  if (_cmpState) drawCompare();
+});
 
 document.getElementById("cmpBtn").addEventListener("click", () => {
   const list = cmpCandidates();
   if (!list.length) { setStatus("暂无可对比的股票（先查询或加入自选股）"); return; }
+  // 默认日期范围：各股票数据并集范围，默认取最近 30 天
+  let minD = null, maxD = null;
+  for (const c of list) {
+    const d = cmpDataOf(c.secid);
+    if (d && d.dates && d.dates.length) {
+      const a = d.dates[0], b = d.dates[d.dates.length - 1];
+      if (!minD || a < minD) minD = a;
+      if (!maxD || b > maxD) maxD = b;
+    }
+  }
+  const fromEl = document.getElementById("cmpFrom"), toEl = document.getElementById("cmpTo");
+  if (minD && maxD) {
+    const toD = new Date(maxD + "T00:00:00");
+    const fromD = new Date(toD); fromD.setDate(fromD.getDate() - 29);
+    const fromS = fromD.toISOString().slice(0, 10);
+    fromEl.value = fromS < minD ? minD : fromS;
+    toEl.value = maxD;
+    document.getElementById("cmpRangeTip").textContent = "可用范围 " + minD + " ~ " + maxD;
+  }
   const box = document.getElementById("cmpList");
   box.innerHTML = list.map((c, i) =>
     "<label class='cmp-item'><input type='checkbox' value='" + c.secid + "' " + (i < 2 ? "checked" : "") + ">" +
@@ -1884,6 +1972,13 @@ document.getElementById("cmpBtn").addEventListener("click", () => {
   ).join("");
   document.getElementById("compareOverlay").style.display = "flex";
   document.getElementById("compareCanvas").style.display = "none";
+});
+// 日期范围变更自动重绘
+document.getElementById("cmpFrom").addEventListener("change", () => {
+  if (document.getElementById("compareCanvas").style.display === "block" && _cmpState) drawCompare();
+});
+document.getElementById("cmpTo").addEventListener("change", () => {
+  if (document.getElementById("compareCanvas").style.display === "block" && _cmpState) drawCompare();
 });
 document.getElementById("cmpGo").addEventListener("click", drawCompare);
 document.getElementById("cmpClose").addEventListener("click", () => {

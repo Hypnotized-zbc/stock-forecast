@@ -614,22 +614,21 @@ def fetch_quotes(secids):
             return out
     except Exception as exc:
         print(f"[quotes] 东财批量失败: {exc}")
-    # 回退：逐只新浪（新浪无 PE/PB 字段）→ PE/PB 依次用东财单股、腾讯接口
+    # 回退：逐只新浪（新浪无 PE/PB/市值字段）→ 依次用东财单股、腾讯接口
     # 补齐（双备源提高命中率，避免基本面信息缺失）
     fallback = [q for q in (fetch_quote(s) for s in secids) if q]
     for q in fallback:
-        if q.get("pe") is None or q.get("pb") is None:
+        if None in (q.get("pe"), q.get("pb"), q.get("mktcap")):
             try:
                 em = _quote_eastmoney(q["secid"])
             except Exception:
                 em = None
-            if not em or (em.get("pe") is None and em.get("pb") is None):
+            if not em or all(v is None for v in (em.get("pe"), em.get("pb"), em.get("mktcap"))):
                 em = _quote_tencent(q["secid"])
             if em:
-                if q.get("pe") is None and em.get("pe") is not None:
-                    q["pe"] = em.get("pe")
-                if q.get("pb") is None and em.get("pb") is not None:
-                    q["pb"] = em.get("pb")
+                for k in ("pe", "pb", "mktcap", "float_mktcap"):
+                    if q.get(k) is None and em.get(k) is not None:
+                        q[k] = em.get(k)
     return fallback
 
 
@@ -640,7 +639,8 @@ def _tencent_code(secid):
 
 
 def _quote_tencent(secid):
-    """腾讯行情接口 qt.gtimg.cn：取 PE/PB 基本面（字段 39=PE、46=PB）。失败返回 None。"""
+    """腾讯行情接口 qt.gtimg.cn：取 PE/PB/市值（字段 39=PE、46=PB、44=总市值亿、
+    45=流通市值亿，市值转元）。失败返回 None。"""
     try:
         resp = _SESSION.get(
             f"https://qt.gtimg.cn/q={_tencent_code(secid)}",
@@ -654,9 +654,18 @@ def _quote_tencent(secid):
         f = m.group(1).split("~")
         if len(f) < 47:
             return None
-        pe = float(f[39]) if f[39] not in ("", "0.00") else None
-        pb = float(f[46]) if f[46] not in ("", "0.00") else None
-        return {"pe": pe, "pb": pb}
+        def num(i):
+            try:
+                v = float(f[i])
+                return v if v > 0 else None
+            except (TypeError, ValueError, IndexError):
+                return None
+        return {
+            "pe": num(39),
+            "pb": num(46),
+            "mktcap": num(44) * 1e8 if num(44) else None,       # 亿 → 元
+            "float_mktcap": num(45) * 1e8 if num(45) else None,  # 亿 → 元
+        }
     except Exception:
         return None
 
