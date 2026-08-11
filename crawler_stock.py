@@ -1512,6 +1512,7 @@ async function doSearch() {
 }
 
 // ---- 实时行情 / 自选股 ----
+let _curSecid = null;
 let _quoteTimer = null;
 let _watchQuotes = {};
 let _watch = [];
@@ -1520,8 +1521,11 @@ try { _watch = JSON.parse(localStorage.getItem("wl") || "[]"); } catch (e) { _wa
 function fmtAmount(v) { if (v==null || !(v>0)) return "—"; if (v>=1e8) return (v/1e8).toFixed(2)+"亿"; if (v>=1e4) return (v/1e4).toFixed(2)+"万"; return v; }
 
 async function refreshAllQuotes() {
-  // 统一刷新全部自选股（一次批量请求，同一时刻）
-  const secids = _watch.map(w => w.secid);
+  // 统一刷新：当前股 + 全部自选股（一次批量请求、同一时刻）
+  // 当前股标题涨跌幅与自选股列表用同一份数据，保证两处显示一致
+  const secids = [];
+  if (_curSecid) secids.push(_curSecid);
+  for (const w of _watch) if (!secids.includes(w.secid)) secids.push(w.secid);
   if (!secids.length) return;
   try {
     const resp = await fetch("/api/quotes?secids=" + encodeURIComponent(secids.join(",")));
@@ -1533,6 +1537,7 @@ async function refreshAllQuotes() {
     const map = {};
     for (const q of list) if (q && q.price != null) map[q.secid] = q;
     _watchQuotes = map;
+    if (_curSecid && map[_curSecid]) updateCurQuoteFrom(map[_curSecid]);
     renderWatchQuotes(map);
   } catch (e) {
     setStatus("实时行情获取失败，30 秒后自动重试");
@@ -1547,8 +1552,9 @@ function startQuoteTimer() {
 function setChartData(data, name, secid) {
   D = data;
   n = D.dates.length;
+  _curSecid = secid;
   // 当前查询股票醒目标题：名称 + 代码 + 涨跌幅（红涨绿跌）
-  // 先用K线最后交易日涨跌幅兜底，随后用实时行情刷新（与自选股数据源一致）
+  // 先用K线最后交易日涨跌幅兜底，随后 refreshAllQuotes 用同一批量接口刷新（与自选股一致）
   const code = String(secid || "").split(".")[1] || "";
   const lc = D.changes && D.changes.length ? D.changes[n-1] : null;
   let chgHtml = "";
@@ -1559,7 +1565,6 @@ function setChartData(data, name, secid) {
   }
   document.getElementById("curStock").innerHTML =
     (data.name || name) + "<span class='code'>" + code + "</span>" + chgHtml;
-  updateCurQuote(secid);
   document.getElementById("rangeInfo").textContent =
     (data.name || name) + " | " + D.dates[0] + " ~ " + D.dates[n-1] + " | 共 " + n + " 个交易日";
   // 注意：不清空 candidateBox——候选选项在加入自选股/重新搜索前保持显示，避免闪烁消失
@@ -1571,19 +1576,14 @@ function setChartData(data, name, secid) {
 
 function saveWatch() { try { localStorage.setItem("wl", JSON.stringify(_watch)); } catch (e) {} }
 
-// 用实时行情刷新当前股标题涨跌幅（与自选股实时行情同源）；失败则保留K线兜底值
-async function updateCurQuote(secid) {
-  if (!secid) return;
-  try {
-    const resp = await fetch("/api/quote?secid=" + encodeURIComponent(secid));
-    const q = await resp.json();
-    if (!q || q.error || q.price == null || !(q.price > 0) || q.change_pct == null) return;
-    const el = document.querySelector("#curStock .chg");
-    if (!el) return;
-    const up = q.change_pct >= 0;
-    el.textContent = (up ? "+" : "") + q.change_pct.toFixed(2) + "%";
-    el.style.color = up ? UP : DOWN;
-  } catch (e) {}
+// 用批量行情数据更新当前股标题涨跌幅（与自选股同一接口同一时刻，保证一致）
+function updateCurQuoteFrom(q) {
+  if (!q || q.price == null || !(q.price > 0) || q.change_pct == null) return;
+  const el = document.querySelector("#curStock .chg");
+  if (!el) return;
+  const up = q.change_pct >= 0;
+  el.textContent = (up ? "+" : "") + q.change_pct.toFixed(2) + "%";
+  el.style.color = up ? UP : DOWN;
 }
 function renderWatchlist() {
   const bar = document.getElementById("watchlist");
