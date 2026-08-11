@@ -907,6 +907,7 @@ function seriesMinMax(arr, padRatio) {
 let ZOOM = null;       // null=普通模式；{i0, i1}=放大模式可见天数索引范围
 let _zoomDrag = null;  // 拖拽平移状态 {startX, i0, i1, moved}
 let _zoomSuppressClick = false;  // 拖拽结束后标记：随后的 click 不触发锁定
+let _pinTipManual = null;  // pinTip 手动拖动后的相对图表偏移 {dx, dy}（放大模式生效）
 
 // 可见天数索引范围（普通模式返回全年）
 function zRange() {
@@ -1318,6 +1319,7 @@ function drawFutureTooltip() {
     const i = Math.round((px - padL) / (plotW / Math.max(1, m - 1)));
     if (i < 0 || i >= m) return;
     window._pin = {view: "future", i: i};
+    _pinTipManual = null;  // 重新锁定后清除手动位置
     drawFuture();
     showPinTip("future");
   };
@@ -1489,35 +1491,57 @@ function showPinTip(v) {
   const pin = window._pin;
   if (!pin || pin.view !== v || !D || !n || pin.i == null) { tip.style.display = "none"; return; }
   const i = pin.i;
-  // 放大模式下固定点不在可见范围内时隐藏窗口（避免定位到画布外）
-  if (ZOOM && (i < ZOOM.i0 || i > ZOOM.i1)) { tip.style.display = "none"; return; }
-  tip.innerHTML = tipContentFor(v, i);
   const zooming = document.getElementById("zoomOverlay").style.display === "flex";
+  tip.innerHTML = tipContentFor(v, i);
+  if (zooming) {
+    const zc = document.getElementById("zoomCanvas");
+    const r = zc.getBoundingClientRect();
+    // 手动拖动过：窗口保持相对图表的偏移，随图表移动但不吸附固定点
+    if (_pinTipManual) {
+      tip.style.position = "fixed";
+      tip.style.left = (r.left + _pinTipManual.dx) + "px";
+      tip.style.top = (r.top + _pinTipManual.dy) + "px";
+      tip.style.display = "block";
+      return;
+    }
+    const padL = v === "future" ? 70 : PAD.L;
+    const padR = v === "future" ? 24 : PAD.R;
+    const plotW = W - padL - padR;
+    let x;
+    if (v === "future") {
+      x = ZOOM ? padL + (i - ZOOM.i0) * plotW / Math.max(1, ZOOM.i1 - ZOOM.i0)
+               : padL + i * plotW / Math.max(1, 10 - 1);
+    } else {
+      x = xOf(i);
+    }
+    // 固定点移出可见范围时窗口停在边界（不消失）
+    x = Math.max(padL, Math.min(W - padR, x));
+    const sx = r.left + x * r.width / W;
+    let tx = sx + 14;
+    if (tx + 260 > window.innerWidth) tx = sx - 270;
+    tip.style.position = "fixed";
+    tip.style.left = tx + "px";
+    tip.style.top = (r.top + 30) + "px";
+    tip.style.display = "block";
+    return;
+  }
+  // 普通模式：固定窗口相对页面（文档坐标）定位——吸附固定点，
+  // 页面滚动时随图表一起移动，不遮挡滚动上来的其他信息
   const cvs = v === "future" ? fcv : cv;
-  const rect = zooming ? document.getElementById("zoomCanvas").getBoundingClientRect() : cvs.getBoundingClientRect();
+  const rect = cvs.getBoundingClientRect();
   let x;
   if (v === "future") {
     const padL = 70, padR = 24, plotW = W - padL - padR, m = 10;
-    x = ZOOM ? padL + (i - ZOOM.i0) * plotW / Math.max(1, ZOOM.i1 - ZOOM.i0)
-             : padL + i * plotW / Math.max(1, m - 1);
+    x = padL + i * plotW / Math.max(1, m - 1);
   } else {
     x = xOf(i);
   }
   const sx = rect.left + x * rect.width / W;
   let tx = sx + 14;
   if (tx + 260 > window.innerWidth) tx = sx - 270;
-  if (zooming) {
-    // 放大模式：overlay 相对视口固定，浮窗用视口坐标
-    tip.style.position = "fixed";
-    tip.style.left = tx + "px";
-    tip.style.top = (rect.top + 30) + "px";
-  } else {
-    // 普通模式：固定窗口相对页面（文档坐标）定位——
-    // 页面滚动时随图表一起移动，不遮挡滚动上来的其他信息
-    tip.style.position = "absolute";
-    tip.style.left = (tx + window.scrollX) + "px";
-    tip.style.top = (rect.top + 30 + window.scrollY) + "px";
-  }
+  tip.style.position = "absolute";
+  tip.style.left = (tx + window.scrollX) + "px";
+  tip.style.top = (rect.top + 30 + window.scrollY) + "px";
   tip.style.display = "block";
 }
 
@@ -1564,9 +1588,10 @@ function drawTooltip() {
     const i = Math.round((px-PAD.L) * Math.max(1,n-1) / (W-PAD.L-PAD.R));
     if (i<0 || i>=n) return;
     window._pin = {view: view, i: i};
+    _pinTipManual = null;  // 重新锁定后清除手动位置
     if (view === "fit") { drawFit(); } else { paint(currentType); }
     showPinTip(view);
-  };
+    };
 }
 
 // ---- 全屏放大（双击图表进入；滚轮缩放横轴、左键拖拽平移、单击锁定）----
@@ -1574,6 +1599,7 @@ function enterZoom() {
   if (!D || !n) return;
   const total = zoomTotalIdx();
   ZOOM = {i0: 0, i1: total};
+  _pinTipManual = null;  // 进入放大清除手动位置
   document.getElementById("zoomOverlay").style.display = "flex";
   drawZoomCanvas();
   setStatus("放大模式：滚轮缩放横轴，左键拖拽平移，单击锁定参考线，右上角 ✕ 关闭");
@@ -1583,6 +1609,7 @@ function exitZoom() {
   ZOOM = null;
   _zoomDrag = null;
   window._pin = null;  // 退出放大同时清除锁定参考线
+  _pinTipManual = null;
   document.getElementById("zoomOverlay").style.display = "none";
   document.getElementById("pinTip").style.display = "none";
   document.getElementById("zoomCanvas").style.cursor = "";
@@ -1753,6 +1780,7 @@ function drawZoomCrosshair(fi) {
     const i = Math.round(fi);
     if (i < ZOOM.i0 || i > ZOOM.i1) return;
     window._pin = {view: view, i: i};
+    _pinTipManual = null;  // 重新锁定后清除手动位置，窗口重新吸附固定点
     drawZoomCanvas();
     showPinTip(view);
   });
@@ -1798,6 +1826,7 @@ document.addEventListener("click", e => {
   if (t.closest && (t.closest("canvas") || t.closest(".tip-box") || t.closest("#zoomClose"))) return;
   if (!window._pin) return;
   window._pin = null;
+  _pinTipManual = null;
   document.getElementById("pinTip").style.display = "none";
   // 重绘去掉锁定线（放大模式重画放大画布，普通模式按视图重绘）
   if (ZOOM) drawZoomCanvas();
@@ -1833,6 +1862,8 @@ document.addEventListener("click", e => {
     }
     tip.style.left = nx + "px";
     tip.style.top = ny + "px";
+    // 记录相对图表的偏移：放大模式下拖拽图表时窗口保持相对位置跟随
+    if (zooming) _pinTipManual = {dx: nx - b.left, dy: ny - b.top};
   });
   window.addEventListener("mouseup", () => { drag = null; });
 })();
