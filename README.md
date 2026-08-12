@@ -54,7 +54,9 @@ python3 -m pytest tests/ -q
 ```
 
 ### 云部署（可选）
-自选股 / AI 解读缓存 / 查询历史会存入本地 SQLite 文件 `stock_forecast.db`（自动创建）。
+自选股 / AI 解读缓存 / 查询历史会存入本地 SQLite 文件 `stock_forecast.db`（自动创建），
+并且**按登录用户隔离**：注册账号（用户名+密码+图形验证码）后，自选股等数据
+只属于该用户，换设备登录即可读取自己的数据。
 部署到云服务器时，用环境变量控制监听地址和端口：
 
 ```bash
@@ -66,8 +68,10 @@ $env:STOCK_HOST="0.0.0.0"; $env:STOCK_PORT="8000"; python app.py
 
 - 公网模式不会因"页面关闭"自动停止，需 Ctrl+C
 - 记得在云安全组放行对应端口（如 8000）
-- 数据库文件路径可用 `STOCK_DB` 覆盖；三张表：`watchlist` 自选股、
+- 数据库文件路径可用 `STOCK_DB` 覆盖；四张表：`users` 用户、`watchlist` 自选股、
   `ai_cache` AI解读缓存、`history` 查询历史
+- 密码以 PBKDF2-SHA256 加盐哈希存储，不存明文；登录会话 token 存内存，
+  服务重启后需重新登录
 
 ---
 
@@ -83,7 +87,7 @@ backend.py (Python 标准库 HTTP 服务)
    ├── 指标层   MA / BOLL / MACD / KDJ / RSI（手写）
    ├── 模型层   ARIMA / ETS / Prophet / SVR / RF（纯 Python 数值实现）
    ├── AI 层    DeepSeek Chat API（可选，需 Key）
-   └── 存储层   db.py → SQLite（自选股 / AI缓存 / 历史，云部署时存服务器）
+   └── 存储层   db.py → SQLite（用户/自选股 / AI缓存 / 历史，云部署时存服务器）
 ```
 
 亮点实现（均无第三方科学计算库）：
@@ -118,7 +122,12 @@ stock-forecast/
 | `/api/quotes?secids=` | 批量实时行情 |
 | `/api/quote?secid=` | 单只实时行情 |
 | `/api/insight?secid=&name=&recent=` | AI 技术解读 |
-| `/api/watchlist` | 自选股列表（GET）／增删（POST: action=add/remove, secid, name） |
+| `/api/captcha` | 图形验证码（注册用） |
+| `/api/register` | 注册（POST: username, password, captcha_id, captcha） |
+| `/api/login` | 登录（POST: username, password → token） |
+| `/api/logout` | 登出（POST，带 Bearer token） |
+| `/api/me` | 当前登录用户（GET，带 Bearer token） |
+| `/api/watchlist` | 自选股列表（GET）／增删（POST: action=add/remove, secid, name），需登录 |
 | `/api/ai-cache` | AI 解读缓存（GET: ?secid=&period= ／POST 保存） |
 | `/api/history` | 查询历史（GET ／POST 记录） |
 | `/api/shutdown` | 页面关闭信号 |

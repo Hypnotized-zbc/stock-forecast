@@ -3,12 +3,13 @@
 """
 数据库模块（SQLite，标准库，零依赖）
 =====================================
-三张表：
+四张表：
+- users     : 用户账号（user_id, username, password_hash, salt, created_at）
 - watchlist : 自选股列表（user_id, secid, name, added_at）
 - ai_cache  : AI 解读缓存（user_id, secid, period, text, ts）
 - history   : 查询历史（user_id, secid, name, ts）
 
-现阶段单用户（user_id 默认 "default"），字段预留多用户扩展。
+用户数据按 user_id 隔离（多用户）。密码存储为加盐哈希，不存明文。
 数据库文件默认项目目录 stock_forecast.db，可用环境变量 STOCK_DB 覆盖。
 线程安全：每次操作独立连接（SQLite 连接不能跨线程共享）。
 """
@@ -33,6 +34,14 @@ def init_db():
     """建表（幂等）。启动时调用一次。"""
     conn = _conn()
     try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                username      TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                salt          TEXT NOT NULL,
+                created_at    TEXT NOT NULL
+            )""")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS watchlist (
                 user_id  TEXT NOT NULL DEFAULT 'default',
@@ -59,6 +68,47 @@ def init_db():
                 ts      TEXT NOT NULL
             )""")
         conn.commit()
+    finally:
+        conn.close()
+
+
+# ---------------- users ----------------
+
+def user_create(username, password_hash, salt):
+    """创建用户。username 冲突时抛 sqlite3.IntegrityError。"""
+    conn = _conn()
+    try:
+        conn.execute(
+            "INSERT INTO users (username, password_hash, salt, created_at) VALUES (?,?,?,?)",
+            (username, password_hash, salt, time.strftime("%Y-%m-%d %H:%M:%S")))
+        conn.commit()
+        return conn.execute("SELECT user_id FROM users WHERE username=?", (username,)).fetchone()[0]
+    finally:
+        conn.close()
+
+
+def user_get_by_username(username):
+    conn = _conn()
+    try:
+        row = conn.execute(
+            "SELECT user_id, username, password_hash, salt FROM users WHERE username=?",
+            (username,)).fetchone()
+        if not row:
+            return None
+        return {"user_id": row[0], "username": row[1], "password_hash": row[2], "salt": row[3]}
+    finally:
+        conn.close()
+
+
+def user_get(user_id):
+    conn = _conn()
+    try:
+        row = conn.execute(
+            "SELECT user_id, username, created_at FROM users WHERE user_id=?",
+            (user_id,)).fetchone()
+        if not row:
+            return None
+        return {"user_id": row[0], "username": row[1], "created_at": row[2]}
     finally:
         conn.close()
 

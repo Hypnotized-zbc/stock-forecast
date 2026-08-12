@@ -130,7 +130,12 @@
 </head>
 <body>
 <div class="header">
-  <h2>股票历史数据查询</h2>
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <h2>股票历史数据查询</h2>
+    <div id="authArea" style="font-size:13px">
+      <button id="loginBtn" style="padding:3px 14px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer">登录 / 注册</button>
+    </div>
+  </div>
   <div class="query-row">
     <label for="stockInput">查询股票：</label>
     <input type="text" id="stockInput" placeholder="名称或代码，如：601088 / 中国神华 / 600519" autofocus>
@@ -212,6 +217,27 @@
       <canvas id="compareCanvas" style="display:none"></canvas>
       <div id="cmpTip" class="cmp-tip" style="display:none"></div>
       <div id="cmpFollowTip" class="cmp-tip" style="display:none"></div>
+    </div>
+  </div>
+</div>
+<div id="authModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.45);z-index:2000;justify-content:center;align-items:flex-start;padding-top:8vh">
+  <div style="background:#fff;border-radius:12px;padding:22px 26px;width:340px;box-shadow:0 10px 40px rgba(0,0,0,.2)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <div style="display:flex;gap:4px">
+        <button id="authTabLogin" style="padding:5px 16px;border:1px solid #d1d5db;border-radius:6px;background:#2563eb;color:#fff;cursor:pointer;font-size:14px">登录</button>
+        <button id="authTabReg" style="padding:5px 16px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;font-size:14px;color:#4b5563">注册</button>
+      </div>
+      <button id="authClose" style="border:none;background:none;font-size:18px;cursor:pointer;color:#9ca3af">✕</button>
+    </div>
+    <div id="authForm" style="display:flex;flex-direction:column;gap:10px">
+      <input id="authUsername" type="text" placeholder="用户名（3-20 个字符）" style="padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px">
+      <input id="authPassword" type="password" placeholder="密码（至少 6 位）" style="padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px">
+      <div id="captchaRow" style="display:none;align-items:center;gap:8px">
+        <input id="authCaptcha" type="text" placeholder="验证码" style="padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;width:110px;text-transform:uppercase">
+        <img id="captchaImg" style="height:38px;border:1px solid #e5e7eb;border-radius:6px;cursor:pointer" title="看不清？点一下换一张">
+      </div>
+      <div id="authMsg" style="color:#c0392b;font-size:12px;min-height:16px"></div>
+      <button id="authSubmit" style="padding:9px;border:none;border-radius:6px;background:#2563eb;color:#fff;cursor:pointer;font-size:14px">登录</button>
     </div>
   </div>
 </div>
@@ -1619,11 +1645,12 @@ function renderWatchQuotes(map) {
 }
 function addWatch(secid, name, code) {
   if (_watch.some(w => w.secid === secid)) { setStatus("已在自选中"); return; }
+  if (!_token) setStatus("未登录：自选股仅保存在本机，登录后可同步到云端");
   _watch.push({secid: secid, name: name, code: code});
   saveWatch(); renderWatchlist();
   refreshAllQuotes();
   setStatus("已加入自选: " + name + "，正在下载数据...");
-  cloudPost("/api/watchlist", {action: "add", secid: secid, name: name});
+  if (_token) cloudPost("/api/watchlist", {action: "add", secid: secid, name: name});
   // 加入自选后自动下载该股K线并打开图表（命中缓存秒开），无需再点候选
   doKlineSecid(secid, name);
 }
@@ -1633,35 +1660,134 @@ function removeWatch(secid) {
   cloudPost("/api/watchlist", {action: "remove", secid: secid});
 }
 
+// ---- 用户认证（登录/注册/会话） ----
+let _token = "";
+let _username = "";
+try { _token = localStorage.getItem("sf_token") || ""; } catch (e) { _token = ""; }
+try { _username = localStorage.getItem("sf_user") || ""; } catch (e) { _username = ""; }
+
+function authHeaders() {
+  const h = {"Content-Type": "application/json"};
+  if (_token) h["Authorization"] = "Bearer " + _token;
+  return h;
+}
+// 401 统一处理：会话失效时清 token 并提示重新登录
+function handleAuthFail() {
+  if (_token) {
+    _token = ""; _username = "";
+    try { localStorage.removeItem("sf_token"); localStorage.removeItem("sf_user"); } catch (e) {}
+    renderAuthArea();
+    setStatus("登录已过期，请重新登录");
+  }
+}
+
 // ---- 云端用户数据同步（自选股/AI缓存/历史 持久化到服务器 SQLite） ----
 // 本地模式后端也在跑，同一接口即写本机库文件；云部署后即写服务器库文件。
 // 失败静默：网络异常时本地 localStorage 兜底，不阻塞主流程。
 async function cloudPost(path, body) {
   try {
-    await fetch(path, {method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(body)});
+    const r = await fetch(path, {method: "POST", headers: authHeaders(), body: JSON.stringify(body)});
+    if (r.status === 401) handleAuthFail();
   } catch (e) { /* 静默 */ }
 }
 async function cloudGet(path) {
   try {
-    const r = await fetch(path);
+    const r = await fetch(path, {headers: authHeaders()});
+    if (r.status === 401) { handleAuthFail(); return null; }
     if (!r.ok) return null;
     return await r.json();
   } catch (e) { return null; }
 }
-// 页面加载时从云端拉取自选股（云端优先，本地 localStorage 仅兜底）
-async function loadWatchFromCloud() {
-  const d = await cloudGet("/api/watchlist");
-  if (d && Array.isArray(d.items) && d.items.length) {
-    // 云端条目无 code 字段，渲染时用 secid 派生；本地多余的保留（合并去重）
-    const seen = new Set(_watch.map(w => w.secid));
-    for (const it of d.items) {
-      if (!seen.has(it.secid)) { _watch.push({secid: it.secid, name: it.name, code: ""}); seen.add(it.secid); }
-    }
-    saveWatch(); renderWatchlist(); refreshAllQuotes();
+// 登录态 UI：未登录显示"登录/注册"，已登录显示用户名 + 退出
+function renderAuthArea() {
+  const area = document.getElementById("authArea");
+  if (_username) {
+    area.innerHTML = "<span style='color:#4b5563'>👤 " + _username + "</span> " +
+      "<button id='logoutBtn' style='padding:3px 10px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;margin-left:6px'>退出</button>";
+    document.getElementById("logoutBtn").addEventListener("click", () => {
+      cloudPost("/api/logout", {});
+      _token = ""; _username = "";
+      try { localStorage.removeItem("sf_token"); localStorage.removeItem("sf_user"); } catch (e) {}
+      renderAuthArea();
+      setStatus("已退出登录");
+    });
+  } else {
+    area.innerHTML = "<button id='loginBtn' style='padding:3px 14px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer'>登录 / 注册</button>";
+    document.getElementById("loginBtn").addEventListener("click", () => openAuthModal("login"));
   }
 }
+
+// ---- 登录/注册模态框 ----
+let _authMode = "login";       // login | register
+let _captchaId = "";
+function openAuthModal(mode) {
+  _authMode = mode || "login";
+  document.getElementById("authModal").style.display = "flex";
+  setAuthTab();
+  loadCaptcha();
+}
+function closeAuthModal() {
+  document.getElementById("authModal").style.display = "none";
+}
+function setAuthTab() {
+  const isReg = _authMode === "register";
+  document.getElementById("authTabLogin").style.background = isReg ? "#fff" : "#2563eb";
+  document.getElementById("authTabLogin").style.color = isReg ? "#4b5563" : "#fff";
+  document.getElementById("authTabReg").style.background = isReg ? "#2563eb" : "#fff";
+  document.getElementById("authTabReg").style.color = isReg ? "#fff" : "#4b5563";
+  document.getElementById("captchaRow").style.display = isReg ? "flex" : "none";
+  document.getElementById("authSubmit").textContent = isReg ? "注册" : "登录";
+  document.getElementById("authMsg").textContent = "";
+  document.getElementById("authUsername").value = "";
+  document.getElementById("authPassword").value = "";
+  document.getElementById("authCaptcha").value = "";
+}
+async function loadCaptcha() {
+  try {
+    const d = await (await fetch("/api/captcha")).json();
+    _captchaId = d.captcha_id;
+    document.getElementById("captchaImg").src = d.svg;
+  } catch (e) { /* 静默 */ }
+}
+function authSubmit() {
+  const username = document.getElementById("authUsername").value.trim();
+  const password = document.getElementById("authPassword").value;
+  const captcha = document.getElementById("authCaptcha").value.trim();
+  const msg = document.getElementById("authMsg");
+  const doFetch = async (path, body) => {
+    try {
+      const r = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+      const d = await r.json();
+      if (!r.ok) { msg.textContent = d.error || "请求失败"; if (_authMode === "register") loadCaptcha(); return; }
+      if (d.token) {
+        _token = d.token; _username = d.username || username;
+        try { localStorage.setItem("sf_token", _token); localStorage.setItem("sf_user", _username); } catch (e) {}
+        closeAuthModal();
+        renderAuthArea();
+        setStatus("欢迎，" + _username);
+        loadWatchFromCloud();
+      }
+    } catch (e) { msg.textContent = "网络错误"; }
+  };
+  if (_authMode === "register") {
+    if (username.length < 3 || username.length > 20) { msg.textContent = "用户名长度需 3-20 个字符"; return; }
+    if (password.length < 6) { msg.textContent = "密码至少 6 位"; return; }
+    if (!captcha) { msg.textContent = "请输入验证码"; return; }
+    doFetch("/api/register", {username, password, captcha_id: _captchaId, captcha});
+  } else {
+    if (!username || !password) { msg.textContent = "请输入用户名和密码"; return; }
+    doFetch("/api/login", {username, password});
+  }
+}
+document.getElementById("authClose").addEventListener("click", closeAuthModal);
+document.getElementById("authTabLogin").addEventListener("click", () => { _authMode = "login"; setAuthTab(); });
+document.getElementById("authTabReg").addEventListener("click", () => { _authMode = "register"; setAuthTab(); loadCaptcha(); });
+document.getElementById("authSubmit").addEventListener("click", authSubmit);
+document.getElementById("captchaImg").addEventListener("click", loadCaptcha);
+document.getElementById("authModal").addEventListener("click", e => { if (e.target === e.currentTarget) closeAuthModal(); });
+// Enter 提交
+document.getElementById("authPassword").addEventListener("keydown", e => { if (e.key === "Enter") authSubmit(); });
+document.getElementById("authCaptcha").addEventListener("keydown", e => { if (e.key === "Enter") authSubmit(); });
 
 // ---- K线缓存：已下载过的股票（含自选股）当日不再重复下载 ----
 function cacheKey(secid, period) {
@@ -2437,6 +2563,7 @@ window.addEventListener("pagehide", () => {
   paint(currentType);
   renderWatchlist();
   refreshAllQuotes();
+  renderAuthArea();  // 绑定登录按钮 / 显示已登录用户名（token 有效时后续自动渲染）
   loadWatchFromCloud();  // 云端自选股同步（服务器 SQLite，本地 localStorage 兜底）
 })();
 </script>

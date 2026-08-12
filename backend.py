@@ -21,10 +21,14 @@ crawler_stock.py — 股票历史数据查询 + 图表（单文件 Web 应用）
 依赖：requests（其余全用标准库 + 浏览器自带 Canvas）
 """
 import csv
+import hashlib
 import json
 import math
 import os
+import random
 import re
+import secrets
+import string
 import threading
 import time
 import urllib.parse
@@ -980,6 +984,74 @@ def save_csv(rows):
 _pending_shutdown_ts = None  # 页面关闭标记：30 秒内无新请求才退出（防刷新/拖拽误杀）
 
 
+# ---------------- 用户认证（密码哈希 / 会话 / 图形验证码） ----------------
+# 会话与验证码存内存：服务重启后需重新登录（可接受，数据本身在 SQLite 持久化）
+_SESSIONS = {}       # token -> user_id
+_CAPTCHAS = {}       # captcha_id -> (answer, expire_ts)
+
+PWD_ITER = 100_000  # PBKDF2 迭代次数（密码哈希强度）
+
+
+def hash_password(password, salt=None):
+    """PBKDF2-SHA256 加盐哈希。未提供盐时生成 16 字节随机盐。返回 (hash, salt)。"""
+    if salt is None:
+        salt = secrets.token_hex(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), PWD_ITER)
+    return dk.hex(), salt
+
+
+def verify_password(password, password_hash, salt):
+    dk, _ = hash_password(password, salt)
+    return secrets.compare_digest(dk, password_hash)
+
+
+def _auth_user(headers):
+    """从 Authorization: Bearer <token> 解析用户。返回 (user_id, username) 或 (None, None)。"""
+    auth = headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        token = auth[7:].strip()
+        uid = _SESSIONS.get(token)
+        if uid is not None:
+            u = db.user_get(uid)
+            if u:
+                return uid, u["username"]
+    return None, None
+
+
+def _send_auth_error(handler):
+    handler._send_json({"error": "未登录或登录已过期，请重新登录"}, 401)
+
+
+def _gen_captcha():
+    """生成 4 位字符图形验证码（SVG，零依赖）。返回 (captcha_id, svg)。"""
+    chars = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # 去掉易混淆的 0/O/1/I/L
+    code = "".join(random.choices(chars, k=4))
+    cid = secrets.token_hex(8)
+    _CAPTCHAS[cid] = (code, time.time() + 120)  # 2 分钟有效
+    # 清理过期验证码（防止内存膨胀）
+    now = time.time()
+    for k in [k for k, v in _CAPTCHAS.items() if v[1] < now]:
+        del _CAPTCHAS[k]
+    # 生成 SVG：随机旋转字符 + 干扰线，data URI 直接给前端
+    W, H = 120, 44
+    parts = [f"<svg xmlns='http://www.w3.org/2000/svg' width='{W}' height='{H}' viewBox='0 0 {W} {H}'>"]
+    parts.append("<rect width='100%' height='100%' fill='#f3f4f6'/>")
+    for _ in range(4):
+        x1, y1 = random.randint(0, W), random.randint(0, H)
+        x2, y2 = random.randint(0, W), random.randint(0, H)
+        parts.append(f"<line x1='{x1}' y1='{y1}' x2='{x2}' y2='{y2}' stroke='#9ca3af' stroke-width='1'/>")
+    for i, ch in enumerate(code):
+        x = 20 + i * 24
+        y = random.randint(26, 34)
+        rot = random.randint(-25, 25)
+        color = "#%02x%02x%02x" % (random.randint(30, 200), random.randint(30, 200), random.randint(30, 200))
+        parts.append(f"<text x='{x}' y='{y}' font-size='26' font-family='monospace' font-weight='bold' "
+                     f"fill='{color}' transform='rotate({rot} {x} {y})'>{ch}</text>")
+    parts.append("</svg>")
+    import urllib.parse as _up
+    return cid, "data:image/svg+xml;utf8," + _up.quote("".join(parts))
+
+
 def _cancel_pending_shutdown():
     global _pending_shutdown_ts
     _pending_shutdown_ts = None
@@ -1082,18 +1154,39 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 self._send_json(ai_insight(secid, name, recent))
             elif path == "/api/watchlist":
-                self._send_json({"items": db.watchlist_get()})
+                uid, uname = _auth_user(self.headers)
+                if uid is None:
+                    _send_auth_error(self)
+                    return
+                self._send_json({"items": db.watchlist_get(uid)})
             elif path == "/api/ai-cache":
+                uid, uname = _auth_user(self.headers)
+                if uid is None:
+                    _send_auth_error(self)
+                    return
                 secid = (params.get("secid") or [""])[0].strip()
                 period = (params.get("period") or ["day"])[0].strip() or "day"
                 if not secid:
                     self._send_json({"error": "缺少参数 secid"}, 400)
                     return
-                hit = db.ai_cache_get(db.DEFAULT_USER, secid, period)
+                hit = db.ai_cache_get(uid, secid, period)
                 self._send_json({"hit": hit is not None, "text": (hit or {}).get("text"), "ts": (hit or {}).get("ts")})
             elif path == "/api/history":
+                uid, uname = _auth_user(self.headers)
+                if uid is None:
+                    _send_auth_error(self)
+                    return
                 limit = int((params.get("limit") or ["50"])[0])
-                self._send_json({"items": db.history_get(limit=limit)})
+                self._send_json({"items": db.history_get(uid, limit=limit)})
+            elif path == "/api/captcha":
+                cid, svg = _gen_captcha()
+                self._send_json({"captcha_id": cid, "svg": svg})
+            elif path == "/api/me":
+                uid, uname = _auth_user(self.headers)
+                if uid is None:
+                    self._send_json({"logged_in": False})
+                else:
+                    self._send_json({"logged_in": True, "user_id": uid, "username": uname})
             elif path == "/api/shutdown":
                 global _pending_shutdown_ts
                 _pending_shutdown_ts = time.time()  # 标记关闭，30 秒内无新请求才退出
@@ -1125,9 +1218,56 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, TypeError):
             self._send_json({"error": "请求体不是合法 JSON"}, 400)
             return
-        uid = db.DEFAULT_USER
+        uid, uname = _auth_user(self.headers)
         try:
-            if path == "/api/watchlist":
+            if path == "/api/register":
+                username = (body.get("username") or "").strip()
+                password = body.get("password") or ""
+                captcha_id = (body.get("captcha_id") or "").strip()
+                captcha = (body.get("captcha") or "").strip().upper()
+                if not (3 <= len(username) <= 20):
+                    self._send_json({"error": "用户名长度需 3-20 个字符"}, 400)
+                    return
+                if len(password) < 6:
+                    self._send_json({"error": "密码至少 6 位"}, 400)
+                    return
+                item = _CAPTCHAS.get(captcha_id)
+                if not item or item[1] < time.time():
+                    self._send_json({"error": "验证码已过期，请刷新"}, 400)
+                    return
+                if item[0] != captcha:
+                    self._send_json({"error": "验证码错误"}, 400)
+                    return
+                del _CAPTCHAS[captcha_id]  # 验证码一次性
+                ph, salt = hash_password(password)
+                try:
+                    uid_new = db.user_create(username, ph, salt)
+                except Exception:
+                    self._send_json({"error": "用户名已存在"}, 400)
+                    return
+                # 注册即登录
+                token = secrets.token_hex(24)
+                _SESSIONS[token] = uid_new
+                self._send_json({"ok": True, "token": token, "user_id": uid_new, "username": username})
+            elif path == "/api/login":
+                username = (body.get("username") or "").strip()
+                password = body.get("password") or ""
+                u = db.user_get_by_username(username)
+                if not u or not verify_password(password, u["password_hash"], u["salt"]):
+                    self._send_json({"error": "用户名或密码错误"}, 401)
+                    return
+                token = secrets.token_hex(24)
+                _SESSIONS[token] = u["user_id"]
+                self._send_json({"ok": True, "token": token, "user_id": u["user_id"], "username": u["username"]})
+            elif path == "/api/logout":
+                auth = self.headers.get("Authorization", "")
+                if auth.startswith("Bearer "):
+                    _SESSIONS.pop(auth[7:].strip(), None)
+                self._send_json({"ok": True})
+            elif path == "/api/watchlist":
+                if uid is None:
+                    _send_auth_error(self)
+                    return
                 action = (body.get("action") or "").strip()
                 secid = (body.get("secid") or "").strip()
                 name = (body.get("name") or "").strip()
@@ -1141,8 +1281,11 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     self._send_json({"error": "action 应为 add 或 remove"}, 400)
                     return
-                self._send_json({"ok": True, "items": db.watchlist_get()})
+                self._send_json({"ok": True, "items": db.watchlist_get(uid)})
             elif path == "/api/ai-cache":
+                if uid is None:
+                    _send_auth_error(self)
+                    return
                 secid = (body.get("secid") or "").strip()
                 period = (body.get("period") or "day").strip() or "day"
                 text = (body.get("text") or "").strip()
@@ -1152,6 +1295,9 @@ class Handler(BaseHTTPRequestHandler):
                 db.ai_cache_set(uid, secid, period, text)
                 self._send_json({"ok": True})
             elif path == "/api/history":
+                if uid is None:
+                    _send_auth_error(self)
+                    return
                 secid = (body.get("secid") or "").strip()
                 name = (body.get("name") or "").strip()
                 if not secid:
