@@ -596,7 +596,7 @@ def _quote_eastmoney(secid):
         "secid": secid, "invt": "2", "fltt": "2",
         "fields": "f43,f47,f48,f57,f58,f60,f84,f85,f92,f162,f167,f170,f183",
     }
-    data = get_json(url, params, retries=2, timeout=4)  # 行情类接口快速失败，尽早切换备用源
+    data = get_json(url, params, retries=1, timeout=4)  # 行情类接口快速失败，尽早切换备用源
     d = data.get("data") or {}
     try:
         price = float(d.get("f43"))
@@ -738,18 +738,98 @@ def _sina_quotes_batch(secids):
     return out or None
 
 
+def _tencent_quotes_batch(secids):
+    """腾讯批量实时行情（第二备用源，含 PE/PB/市值等基本面）。
+
+    新浪没有基本面字段，腾讯 qt.gtimg.cn 批量接口一次返回全部股票且含
+    PE/PB/总市值/流通市值（字段 39/46/45/44，单位亿），作为新浪之后、
+    东财之前的第二备用源。失败返回 None。
+    """
+    if not secids:
+        return []
+    syms = []
+    for s in secids:
+        try:
+            prefix, code = s.split(".")
+        except ValueError:
+            continue
+        syms.append(("sh" if prefix == "1" else "sz") + code)
+    if not syms:
+        return None
+    url = "https://qt.gtimg.cn/q=" + ",".join(syms)
+    try:
+        resp = _SESSION.get(url, headers=HEADERS, timeout=4)
+        resp.raise_for_status()
+        resp.encoding = "gbk"
+    except Exception as exc:
+        print(f"[quotes] 腾讯批量失败: {exc}")
+        return None
+    out = []
+    for line in resp.text.strip().splitlines():
+        m = re.search(r'v_([a-z]{2}\d{6})="([^"]*)"', line)
+        if not m:
+            continue
+        sym, payload = m.group(1), m.group(2)
+        f = payload.split("~")
+        if len(f) < 46:
+            continue
+        try:
+            price = float(f[3])
+            prev = float(f[4]) if f[4] else 0.0
+        except (ValueError, IndexError):
+            continue
+        if not price or price <= 0:
+            continue
+        secid = ("1." if sym.startswith("sh") else "0.") + sym[2:]
+        def _f(idx):
+            try:
+                return float(f[idx]) if f[idx] not in (None, "") else None
+            except (ValueError, IndexError):
+                return None
+        out.append({
+            "secid": secid,
+            "name": f[1] if len(f) > 1 else sym,
+            "code": sym[2:],
+            "price": price,
+            "prev_close": prev,
+            "change_pct": _f(32) if len(f) > 32 else None,  # 涨跌幅%
+            "volume": _f(6) if len(f) > 6 else None,          # 成交量(手)
+            "amount": None,
+            "pe": _f(39) if len(f) > 39 else None,            # PE(TTM)
+            "pb": _f(46) if len(f) > 46 else None,            # PB
+            "mktcap": (_f(45) * 1e8) if len(f) > 45 and _f(45) else None,  # 总市值(亿→元)
+            "float_mktcap": (_f(44) * 1e8) if len(f) > 44 and _f(44) else None,
+            "total_shares": None, "float_shares": None, "bps": None,
+        })
+    return out or None
+
+
 def fetch_quotes(secids):
-    """东财 ulist 批量实时行情（含 PE/PB/市值等基本面）；失败回退新浪批量、再回退逐只。"""
+    """实时行情三重保护：新浪批量（主）→ 腾讯批量（备1）→ 东财批量（备2，含基本面）→ 逐只兜底。
+
+    用户实测云服务器上东财接口长期失败，故不再把东财放第一位——
+    新浪/腾讯稳定且支持批量一次返回，东财仅在两者都失败时兜底。
+    每层都短超时（4s）快速失败，保证最坏情况也在几秒内返回。
+    """
     secids = [s.strip() for s in secids if s and s.strip()]
     if not secids:
         return []
+    # 第一源：新浪批量（一次全部，速度快）
+    sina = _sina_quotes_batch(secids)
+    if sina:
+        return [_fill_fundamentals(q, skip_eastmoney=True) for q in sina]
+    # 第二源：腾讯批量（含 PE/PB/市值基本面，无需补齐）
+    tencent = _tencent_quotes_batch(secids)
+    if tencent:
+        return tencent
+    # 第三源：东财批量（含基本面；失败或空则落逐只兜底）
     try:
         url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
         params = {
             "secids": ",".join(secids), "fltt": "2", "invt": "2",
             "fields": "f2,f3,f5,f6,f9,f12,f13,f14,f18,f20,f21,f23",
         }
-        data = get_json(url, params, retries=2, timeout=4)  # 短超时快速失败
+        data = get_json(url, params, retries=1, timeout=4)
         diff = (data.get("data") or {}).get("diff") or []
         out = []
         for it in diff:
@@ -757,7 +837,7 @@ def fetch_quotes(secids):
                 price = float(it.get("f2"))
             except (TypeError, ValueError):
                 continue
-            if not price or price <= 0:  # 无效行情（停牌/接口返回0）不输出，避免前端显示 000
+            if not price or price <= 0:
                 continue
             out.append({
                 "secid": ("1." if it.get("f13") == 1 else "0.") + str(it.get("f12")),
@@ -768,22 +848,16 @@ def fetch_quotes(secids):
                 "change_pct": it.get("f3"),
                 "volume": it.get("f5"),
                 "amount": it.get("f6"),
-                "pe": it.get("f9"),          # PE(动)
-                "pb": it.get("f23"),         # PB
-                "mktcap": it.get("f20"),     # 总市值(元)
-                "float_mktcap": it.get("f21"),  # 流通市值(元)
+                "pe": it.get("f9"),
+                "pb": it.get("f23"),
+                "mktcap": it.get("f20"),
+                "float_mktcap": it.get("f21"),
             })
         if out:
-            # 批量成功但个别股票基本面字段缺失 → 补齐（保险机制）
             return [_fill_fundamentals(q) for q in out]
     except Exception as exc:
         print(f"[quotes] 东财批量失败: {exc}")
-    # 回退1：新浪批量（一次请求全部，速度远快于逐只串行）
-    sina = _sina_quotes_batch(secids)
-    if sina:
-        # skip_eastmoney=True：东财批量已失败，补齐直接腾讯，不再等东财单股
-        return [_fill_fundamentals(q, skip_eastmoney=True) for q in sina]
-    # 回退2：逐只东财→新浪（最后兜底）
+    # 最后兜底：逐只新浪→腾讯→东财
     fallback = [q for q in (fetch_quote(s) for s in secids) if q]
     return [_fill_fundamentals(q, skip_eastmoney=True) for q in fallback]
 
@@ -795,45 +869,55 @@ def _tencent_code(secid):
 
 
 def _quote_tencent(secid):
-    """腾讯行情接口 qt.gtimg.cn：取 PE/PB/市值（字段 39=PE、46=PB、44=总市值亿、
-    45=流通市值亿，市值转元）。失败返回 None。"""
+    """腾讯行情接口 qt.gtimg.cn（完整单只行情 + PE/PB/市值）。
+
+    字段：1名称 3现价 4昨收 5今开 6成交量(手) 32涨跌幅% 39PE 44流通市值亿
+    45总市值亿 46PB。失败返回 None。
+    """
     try:
         resp = _SESSION.get(
             f"https://qt.gtimg.cn/q={_tencent_code(secid)}",
-            headers={"Referer": "http://finance.qq.com"}, timeout=8,
+            headers={"Referer": "http://finance.qq.com"}, timeout=4,
         )
         resp.raise_for_status()
         raw = resp.content.decode("gbk", errors="replace")
-        m = re.search(r'="([^"]+)"', raw)
+        m = re.search(r'v_([a-z]{2}\d{6})="([^"]*)"', raw)
         if not m:
             return None
-        f = m.group(1).split("~")
+        f = m.group(2).split("~")
         if len(f) < 47:
             return None
-        def num(i):
+        def num(i, allow_neg=False):
             try:
                 v = float(f[i])
-                return v if v > 0 else None
+                return v if (v != 0 or allow_neg) else None
             except (TypeError, ValueError, IndexError):
                 return None
+        price = num(3)
+        if not price:
+            return None
+        code = m.group(1)[2:]
         return {
+            "secid": secid,
+            "name": f[1] if len(f) > 1 else code,
+            "code": code,
+            "price": price,
+            "prev_close": num(4),
+            "change_pct": num(32, allow_neg=True),  # 涨跌幅可为负
+            "volume": num(6),
+            "amount": None,
             "pe": num(39),
             "pb": num(46),
-            "mktcap": num(44) * 1e8 if num(44) else None,       # 亿 → 元
-            "float_mktcap": num(45) * 1e8 if num(45) else None,  # 亿 → 元
+            "mktcap": num(45) * 1e8 if num(45) else None,       # 亿 → 元
+            "float_mktcap": num(44) * 1e8 if num(44) else None,  # 亿 → 元
+            "total_shares": None, "float_shares": None, "bps": None,
         }
     except Exception:
         return None
 
 
 def fetch_quote(secid):
-    """东财实时行情（主）→ 新浪（备）；双源都失败返回 None。"""
-    try:
-        q = _quote_eastmoney(secid)
-        if q:
-            return q
-    except Exception as exc:
-        print(f"[quote] 东财失败: {exc}")
+    """单只实时行情三重保护：新浪（主）→ 腾讯（备）→ 东财（兜底）；全失败返回 None。"""
     try:
         q = _quote_sina(secid)
         if q:
@@ -841,6 +925,20 @@ def fetch_quote(secid):
         print("[quote] 新浪返回空")
     except Exception as exc:
         print(f"[quote] 新浪失败: {exc}")
+    try:
+        q = _quote_tencent(secid)
+        if q:
+            return q
+        print("[quote] 腾讯返回空")
+    except Exception as exc:
+        print(f"[quote] 腾讯失败: {exc}")
+    try:
+        q = _quote_eastmoney(secid)
+        if q:
+            return q
+        print("[quote] 东财返回空")
+    except Exception as exc:
+        print(f"[quote] 东财失败: {exc}")
     return None
 
 
