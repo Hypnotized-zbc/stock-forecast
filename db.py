@@ -213,7 +213,7 @@ def history_get(user_id=DEFAULT_USER, limit=50):
 
 # 便于调试：打印数据库路径
 def db_info():
-    return {"db_path": DB_PATH, "tables": ["watchlist", "ai_cache", "history"]}
+    return {"db_path": DB_PATH, "tables": ["users", "watchlist", "ai_cache", "history"]}
 
 
 if __name__ == "__main__":

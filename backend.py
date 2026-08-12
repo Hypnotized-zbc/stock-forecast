@@ -28,6 +28,7 @@ import os
 import random
 import re
 import secrets
+import sqlite3
 import string
 import threading
 import time
@@ -1509,8 +1510,14 @@ class Handler(BaseHTTPRequestHandler):
                 ph, salt = hash_password(password)
                 try:
                     uid_new = db.user_create(username, ph, salt)
-                except Exception:
-                    self._send_json({"error": "用户名冲突，该用户名已被注册，请换一个"}, 400)
+                except sqlite3.IntegrityError:
+                    # 唯一约束冲突 → 用户名已存在
+                    self._send_json({"error": "用户名已存在，请换一个"}, 400)
+                    return
+                except Exception as exc:
+                    # 其他错误（如库表缺失/磁盘问题）→ 500，不误导为用户名冲突
+                    print(f"[register] 创建用户失败: {exc}")
+                    self._send_json({"error": "服务器错误，请稍后重试"}, 500)
                     return
                 # 注册即登录
                 token = secrets.token_hex(24)
