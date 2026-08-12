@@ -3,3 +3,6 @@ __pycache__/
 data/
 backups/
 llm_key.txt
+stock_forecast.db
+stock_forecast.db-wal
+stock_forecast.db-shm

@@ -53,6 +53,22 @@ python3 app.py
 python3 -m pytest tests/ -q
 ```
 
+### 云部署（可选）
+自选股 / AI 解读缓存 / 查询历史会存入本地 SQLite 文件 `stock_forecast.db`（自动创建）。
+部署到云服务器时，用环境变量控制监听地址和端口：
+
+```bash
+# Linux / WSL 服务器
+STOCK_HOST=0.0.0.0 STOCK_PORT=8000 python3 app.py
+# Windows 服务器（PowerShell）
+$env:STOCK_HOST="0.0.0.0"; $env:STOCK_PORT="8000"; python app.py
+```
+
+- 公网模式不会因"页面关闭"自动停止，需 Ctrl+C
+- 记得在云安全组放行对应端口（如 8000）
+- 数据库文件路径可用 `STOCK_DB` 覆盖；三张表：`watchlist` 自选股、
+  `ai_cache` AI解读缓存、`history` 查询历史
+
 ---
 
 ## 🧩 技术架构
@@ -66,7 +82,8 @@ backend.py (Python 标准库 HTTP 服务)
    ├── 数据层   东方财富 API ──失败──▶ 新浪 API（备用）
    ├── 指标层   MA / BOLL / MACD / KDJ / RSI（手写）
    ├── 模型层   ARIMA / ETS / Prophet / SVR / RF（纯 Python 数值实现）
-   └── AI 层    DeepSeek Chat API（可选，需 Key）
+   ├── AI 层    DeepSeek Chat API（可选，需 Key）
+   └── 存储层   db.py → SQLite（自选股 / AI缓存 / 历史，云部署时存服务器）
 ```
 
 亮点实现（均无第三方科学计算库）：
@@ -82,10 +99,12 @@ backend.py (Python 标准库 HTTP 服务)
 stock-forecast/
 ├── app.py              # 启动入口（python3 app.py）
 ├── backend.py          # 后端：数据源/指标/模型/HTTP API/AI 解读
+├── db.py               # 数据库：SQLite 三表（自选股/AI缓存/历史）
 ├── static/index.html   # 前端：页面 + Canvas 图表 + 交互
 ├── tests/test_backend.py  # pytest 单元测试
 ├── backups/            # 每次改动前的版本备份
-└── data/               # K 线 CSV 留档（自动生成）
+├── data/               # K 线 CSV 留档（自动生成）
+└── stock_forecast.db   # 用户数据（自动生成，gitignore）
 ```
 
 ---
@@ -99,6 +118,9 @@ stock-forecast/
 | `/api/quotes?secids=` | 批量实时行情 |
 | `/api/quote?secid=` | 单只实时行情 |
 | `/api/insight?secid=&name=&recent=` | AI 技术解读 |
+| `/api/watchlist` | 自选股列表（GET）／增删（POST: action=add/remove, secid, name） |
+| `/api/ai-cache` | AI 解读缓存（GET: ?secid=&period= ／POST 保存） |
+| `/api/history` | 查询历史（GET ／POST 记录） |
 | `/api/shutdown` | 页面关闭信号 |
 
 ---

@@ -32,6 +32,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import db
 import requests
 
 # 东方财富接口（token 是公开固定值，官网页面也在用）
@@ -1080,6 +1081,19 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json({"error": "缺少参数 secid/recent"}, 400)
                     return
                 self._send_json(ai_insight(secid, name, recent))
+            elif path == "/api/watchlist":
+                self._send_json({"items": db.watchlist_get()})
+            elif path == "/api/ai-cache":
+                secid = (params.get("secid") or [""])[0].strip()
+                period = (params.get("period") or ["day"])[0].strip() or "day"
+                if not secid:
+                    self._send_json({"error": "缺少参数 secid"}, 400)
+                    return
+                hit = db.ai_cache_get(db.DEFAULT_USER, secid, period)
+                self._send_json({"hit": hit is not None, "text": (hit or {}).get("text"), "ts": (hit or {}).get("ts")})
+            elif path == "/api/history":
+                limit = int((params.get("limit") or ["50"])[0])
+                self._send_json({"items": db.history_get(limit=limit)})
             elif path == "/api/shutdown":
                 global _pending_shutdown_ts
                 _pending_shutdown_ts = time.time()  # 标记关闭，30 秒内无新请求才退出
@@ -1092,15 +1106,63 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": f"服务器错误: {exc}"}, 500)
 
     def do_POST(self):
-        """支持页面卸载时 sendBeacon 发来的停止请求（关闭网页即停止服务）。"""
+        """用户数据写接口：自选股增删 / AI 缓存保存 / 查询历史记录。"""
         _cancel_pending_shutdown()
         path = urllib.parse.urlparse(self.path).path
         if path == "/api/shutdown":
             global _pending_shutdown_ts
             _pending_shutdown_ts = time.time()  # 标记关闭，30 秒内无新请求才退出
             self._send_json({"ok": True})
-        else:
-            self._send_json({"error": "404 Not Found"}, 404)
+            return
+
+        # 读取 JSON body（前端统一 application/json 提交）
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            if length <= 0:
+                self._send_json({"error": "缺少请求体"}, 400)
+                return
+            body = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+        except (ValueError, TypeError):
+            self._send_json({"error": "请求体不是合法 JSON"}, 400)
+            return
+        uid = db.DEFAULT_USER
+        try:
+            if path == "/api/watchlist":
+                action = (body.get("action") or "").strip()
+                secid = (body.get("secid") or "").strip()
+                name = (body.get("name") or "").strip()
+                if not secid:
+                    self._send_json({"error": "缺少 secid"}, 400)
+                    return
+                if action == "add":
+                    db.watchlist_add(uid, secid, name or secid)
+                elif action == "remove":
+                    db.watchlist_remove(uid, secid)
+                else:
+                    self._send_json({"error": "action 应为 add 或 remove"}, 400)
+                    return
+                self._send_json({"ok": True, "items": db.watchlist_get()})
+            elif path == "/api/ai-cache":
+                secid = (body.get("secid") or "").strip()
+                period = (body.get("period") or "day").strip() or "day"
+                text = (body.get("text") or "").strip()
+                if not secid or not text:
+                    self._send_json({"error": "缺少 secid 或 text"}, 400)
+                    return
+                db.ai_cache_set(uid, secid, period, text)
+                self._send_json({"ok": True})
+            elif path == "/api/history":
+                secid = (body.get("secid") or "").strip()
+                name = (body.get("name") or "").strip()
+                if not secid:
+                    self._send_json({"error": "缺少 secid"}, 400)
+                    return
+                db.history_add(uid, secid, name or secid)
+                self._send_json({"ok": True})
+            else:
+                self._send_json({"error": "404 Not Found"}, 404)
+        except Exception as exc:
+            self._send_json({"error": f"服务器错误: {exc}"}, 500)
 
 
 def open_browser(url):
@@ -1145,19 +1207,30 @@ def main():
     print("股票历史数据查询（浏览器界面 · 东方财富/新浪数据源）")
     print("=" * 56)
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    db.init_db()  # 建表（幂等），数据库文件见 db.db_info()
+    print(f"[i] 数据库: {db.db_info()['db_path']}")
+
+    # 监听地址/端口：环境变量可覆盖（云部署用 STOCK_HOST=0.0.0.0 STOCK_PORT=8000）
+    host = os.environ.get("STOCK_HOST", "127.0.0.1")
+    port = int(os.environ.get("STOCK_PORT", "0"))
+    server = ThreadingHTTPServer((host, port), Handler)
     server.daemon_threads = True  # 请求线程守护化，客户端断开不拖垮进程
     port = server.server_address[1]
     url = f"http://127.0.0.1:{port}/"
-    print(f"[i] 服务已启动: {url}")
+    print(f"[i] 服务已启动: {url} (监听 {host}:{port})")
     print(f"[i] 浏览器已自动打开，页面上方输入股票名称查询")
-    print(f"[i] 关闭浏览器页面 30 秒后自动停止服务（刷新/切走不误停）")
-    open_browser(url)
+    if host == "127.0.0.1":
+        print(f"[i] 关闭浏览器页面 30 秒后自动停止服务（刷新/切走不误停）")
+        open_browser(url)
+    else:
+        print(f"[i] 公网部署模式：请确保云安全组放行 {port} 端口")
+        print(f"[i] 按 Ctrl+C 停止服务（页面关闭不再自动停止）")
     try:
         server.timeout = 1
         while True:
             server.handle_request()
-            if _pending_shutdown_ts and time.time() - _pending_shutdown_ts > 30:
+            # 本地模式：页面关闭 30 秒无请求自动退出；公网模式常驻
+            if host == "127.0.0.1" and _pending_shutdown_ts and time.time() - _pending_shutdown_ts > 30:
                 print("[i] 页面已关闭，服务自动停止（30 秒无访问）")
                 break
     except KeyboardInterrupt:

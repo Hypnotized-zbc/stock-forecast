@@ -1524,6 +1524,8 @@ function setChartData(data, name, secid) {
   // 按当前视图完整重绘：仅 paint 只更新行情图，模型拟合/未来预测视图的
   // 画布与右侧面板都需同步重渲染（否则点击自选股切换时图和数据不更新）
   window._pin = null;  // 切换股票后旧固定参考线失效，清除
+  // 记录查询历史（云端 SQLite，每次打开股票/切换周期记一条）
+  cloudPost("/api/history", {secid: secid || "", name: (data.name || name || "")});
   if (view === "fit") { renderFitPanel(); drawFit(); }
   else if (view === "future") { renderFuturePanel(); drawFuture(); }
   else paint(currentType);
@@ -1583,7 +1585,7 @@ function renderWatchlist() {
       "<span class='wl-x'></span>" +
     "</div>" + _watch.map(w =>
     "<div class='wl-row' data-secid='"+w.secid+"'>" +
-      "<span class='wl-name'>"+w.name+" <b>"+w.code+"</b></span>" +
+      "<span class='wl-name'>"+w.name+" <b>"+(w.code || (w.secid||"").split(".")[1] || "")+"</b></span>" +
       "<span class='wl-price' style='color:#999'>正在查询数据</span>" +
       "<span class='wl-chg'></span>" +
       "<span class='wl-prev'></span>" +
@@ -1621,12 +1623,44 @@ function addWatch(secid, name, code) {
   saveWatch(); renderWatchlist();
   refreshAllQuotes();
   setStatus("已加入自选: " + name + "，正在下载数据...");
+  cloudPost("/api/watchlist", {action: "add", secid: secid, name: name});
   // 加入自选后自动下载该股K线并打开图表（命中缓存秒开），无需再点候选
   doKlineSecid(secid, name);
 }
 function removeWatch(secid) {
   _watch = _watch.filter(w => w.secid !== secid);
   saveWatch(); renderWatchlist();
+  cloudPost("/api/watchlist", {action: "remove", secid: secid});
+}
+
+// ---- 云端用户数据同步（自选股/AI缓存/历史 持久化到服务器 SQLite） ----
+// 本地模式后端也在跑，同一接口即写本机库文件；云部署后即写服务器库文件。
+// 失败静默：网络异常时本地 localStorage 兜底，不阻塞主流程。
+async function cloudPost(path, body) {
+  try {
+    await fetch(path, {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body)});
+  } catch (e) { /* 静默 */ }
+}
+async function cloudGet(path) {
+  try {
+    const r = await fetch(path);
+    if (!r.ok) return null;
+    return await r.json();
+  } catch (e) { return null; }
+}
+// 页面加载时从云端拉取自选股（云端优先，本地 localStorage 仅兜底）
+async function loadWatchFromCloud() {
+  const d = await cloudGet("/api/watchlist");
+  if (d && Array.isArray(d.items) && d.items.length) {
+    // 云端条目无 code 字段，渲染时用 secid 派生；本地多余的保留（合并去重）
+    const seen = new Set(_watch.map(w => w.secid));
+    for (const it of d.items) {
+      if (!seen.has(it.secid)) { _watch.push({secid: it.secid, name: it.name, code: ""}); seen.add(it.secid); }
+    }
+    saveWatch(); renderWatchlist(); refreshAllQuotes();
+  }
 }
 
 // ---- K线缓存：已下载过的股票（含自选股）当日不再重复下载 ----
@@ -1876,6 +1910,18 @@ async function requestAiInsight(force) {
     panel.innerHTML = aiTitleHtml() + _aiCache[ck];
     return;
   }
+  // 本地无缓存时查云端（服务器 SQLite），命中则写入本地并显示
+  if (!force) {
+    const period = (ck.split("_")[1]) || "day";
+    const cloud = await cloudGet("/api/ai-cache?secid=" + encodeURIComponent(secid || "") + "&period=" + encodeURIComponent(period));
+    if (myToken !== _aiReqToken) return;
+    if (cloud && cloud.hit && cloud.text) {
+      _aiCache[ck] = cloud.text;
+      saveAiCache();
+      panel.innerHTML = aiTitleHtml() + cloud.text.replace(/\n/g, "<br>");
+      return;
+    }
+  }
   panel.innerHTML = aiTitleHtml() + "<div style='color:#9ca3af'>正在进行AI技术解读，大约需要5-10s…</div>";
   const recent = [];
   const start = Math.max(0, n - 20);
@@ -1900,6 +1946,9 @@ async function requestAiInsight(force) {
       }
       _aiCache[ck] = t;  // 保存解读，之后查看不再重复请求
       saveAiCache();
+      // 同步到云端（服务器 SQLite），换设备也能读到
+      const period = (ck.split("_")[1]) || "day";
+      cloudPost("/api/ai-cache", {secid: secid, period: period, text: t});
       panel.innerHTML = aiTitleHtml() + t.replace(/\n/g, "<br>");
     }
   } catch (e) {
@@ -2388,6 +2437,7 @@ window.addEventListener("pagehide", () => {
   paint(currentType);
   renderWatchlist();
   refreshAllQuotes();
+  loadWatchFromCloud();  // 云端自选股同步（服务器 SQLite，本地 localStorage 兜底）
 })();
 </script>
 </body>

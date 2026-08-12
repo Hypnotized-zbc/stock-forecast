@@ -1,5 +1,20 @@
 # 更新报告
 
+## v0.15.0 (2026-08-12)
+- 云数据库支持（用户要求：项目上云、存储用户数据）：
+  - 新增 db.py：SQLite（标准库零依赖）三张表 watchlist/ai_cache/history，
+    数据库文件 stock_forecast.db（已 gitignore），环境变量 STOCK_DB 可改路径
+  - 后端 API：GET/POST /api/watchlist（自选股增删查）、GET/POST /api/ai-cache
+    （AI 解读缓存读写）、GET/POST /api/history（查询历史记录，保留最近200条）
+  - 前端云端同步：加自选/删自选 → POST 云端；AI 解读本地无缓存先查云端、
+    成功后写云端；打开股票记录历史；页面加载拉云端自选股合并本地
+    （localStorage 保留做离线兜底，云端接口失败静默不阻塞）
+  - main() 支持环境变量 STOCK_HOST/STOCK_PORT（云部署：STOCK_HOST=0.0.0.0
+    STOCK_PORT=8000）；公网模式关闭"页面关闭自动停止"，需 Ctrl+C 停止
+  - backup.sh 加 db.py；.gitignore 加数据库文件
+- 验证：后端 API 9 项 curl 全过（增删查自选/AI缓存/历史）；Edge headless CDP
+  前端→后端→SQLite 端到端写库实测通过；node --check/py_compile 通过
+
 ## v0.14.3 (2026-08-12)
 - 移除分享后自动打开图片功能（用户反馈：触发弹窗拦截、打开空白 blank 页，影响使用）：
   - 删除 window.open(dataUrl) 自动打开逻辑及拦截提示分支

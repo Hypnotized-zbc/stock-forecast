@@ -11,6 +11,7 @@ mkdir -p "$BACKUP_DIR"
 FILES=(
   app.py
   backend.py
+  db.py
   static/index.html
   crawler/core.py
   crawler/parsers.py
