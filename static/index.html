@@ -1481,11 +1481,20 @@ let _quoteTimer = null;
 let _watchQuotes = {};
 let _lastQuoteTs = null;  // 最近一次实时行情刷新时间（时间戳显示）
 let _lastManualRefresh = 0;  // 手动刷新节流：10s 内不重复请求
-let _aiCache = {};        // AI 解读缓存：secid_周期 → 文本（localStorage 持久化）
+let _aiCache = {};        // AI 解读缓存：secid_周期 → {text, ts}（localStorage 持久化，ts 判断当天有效）
 let _aiPanelOpen = false; // AI 窗口开关状态：点击打开/再点关闭（缓存保留）
 let _aiReqToken = 0;      // AI 请求序号：防止连续切换股票时旧响应覆盖新面板
 try { _aiCache = JSON.parse(localStorage.getItem("aiCache") || "{}"); } catch (e) { _aiCache = {}; }
 function saveAiCache() { try { localStorage.setItem("aiCache", JSON.stringify(_aiCache)); } catch (e) {} }
+function todayStr() {
+  const d = new Date();
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+// 缓存是否当天有效：新格式 {text, ts} 且 ts 是今天 → 有效直接显示；
+// 旧格式字符串/无 ts/跨天 → 过期，重新解读并覆盖（不新增，避免冗余）
+function aiCacheValid(v) {
+  return !!(v && typeof v === "object" && v.text && (v.ts || "").slice(0, 10) === todayStr());
+}
 function aiCacheKey() {
   // 缓存按当前 K线周期区分（日K/周K/月K），指标图共用日K
   const t = currentType;
@@ -2032,17 +2041,18 @@ async function requestAiInsight(force) {
   const secid = _curSecid;
   const ck = aiCacheKey();
   const myToken = ++_aiReqToken;
-  if (!force && _aiCache[ck]) {
-    panel.innerHTML = aiTitleHtml() + _aiCache[ck];
+  if (!force && aiCacheValid(_aiCache[ck])) {
+    panel.innerHTML = aiTitleHtml() + _aiCache[ck].text;
     return;
   }
-  // 本地无缓存时查云端（服务器 SQLite），命中则写入本地并显示
+  // 本地无有效缓存时查云端（服务器 SQLite），命中且是当天生成则写入本地并显示；
+  // 云端缓存是旧日期 → 不直接用，落下去重新解读并覆盖（同一条记录，不新增）
   if (!force) {
     const period = (ck.split("_")[1]) || "day";
     const cloud = await cloudGet("/api/ai-cache?secid=" + encodeURIComponent(secid || "") + "&period=" + encodeURIComponent(period));
     if (myToken !== _aiReqToken) return;
-    if (cloud && cloud.hit && cloud.text) {
-      _aiCache[ck] = cloud.text;
+    if (cloud && cloud.hit && cloud.text && (cloud.ts || "").slice(0, 10) === todayStr()) {
+      _aiCache[ck] = {text: cloud.text, ts: cloud.ts};
       saveAiCache();
       panel.innerHTML = aiTitleHtml() + cloud.text.replace(/\n/g, "<br>");
       return;
@@ -2070,9 +2080,9 @@ async function requestAiInsight(force) {
         panel.innerHTML = aiTitleHtml() + "<div style='color:#c0392b'>解读结果为空，请点击 🔄 重新生成</div>";
         return;
       }
-      _aiCache[ck] = t;  // 保存解读，之后查看不再重复请求
+      _aiCache[ck] = {text: t, ts: todayStr()};  // 保存解读（覆盖当天记录，不新增），之后查看不再重复请求
       saveAiCache();
-      // 同步到云端（服务器 SQLite），换设备也能读到
+      // 同步到云端（服务器 SQLite，INSERT OR REPLACE 覆盖同一条），换设备也能读到
       const period = (ck.split("_")[1]) || "day";
       cloudPost("/api/ai-cache", {secid: secid, period: period, text: t});
       panel.innerHTML = aiTitleHtml() + t.replace(/\n/g, "<br>");
@@ -2098,7 +2108,7 @@ document.getElementById("aiBtn").addEventListener("click", () => {
   const panel = document.getElementById("aiPanel");
   const ck = aiCacheKey();
   // 窗口开着且当前股票已有解读 → 关闭（开关）；其他情况点击 = 打开并触发解读
-  if (_aiPanelOpen && _aiCache[ck]) {
+  if (_aiPanelOpen && aiCacheValid(_aiCache[ck])) {
     _aiPanelOpen = false;
     panel.style.display = "none";
     return;
