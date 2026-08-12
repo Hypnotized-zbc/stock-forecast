@@ -1543,21 +1543,24 @@ function setChartData(data, name, secid) {
   D = data;
   n = D.dates.length;
   _curSecid = secid;
-  _curName = data.name || name || "";
+  // 名称兜底（双保险）：接口返回 sh601088 这类内部代码时用搜索候选名
+  const dataName = (data.name || "").trim();
+  const goodName = dataName && !/^[a-z]{2}\d{6}$/.test(dataName) ? dataName : (name || "");
+  _curName = goodName;
   // 当前查询股票标题：名称 + 代码（涨跌幅已删除——依赖自选股数据行，未登录/不在自选股时
   // 永远显示 —，用户多次反馈"显示不出来"，删除不再显示）
   const code = String(secid || "").split(".")[1] || "";
   document.getElementById("curStock").innerHTML =
-    (data.name || name) + "<span class='code'>" + code + "</span>";
+    (_curName || "—") + "<span class='code'>" + code + "</span>";
   document.getElementById("rangeInfo").textContent =
-    (data.name || name) + " | " + D.dates[0] + " ~ " + D.dates[n-1] + " | 共 " + n + " 个交易日";
+    (_curName || name || "") + " | " + D.dates[0] + " ~ " + D.dates[n-1] + " | 共 " + n + " 个交易日";
   // 注意：不清空 candidateBox——候选选项在加入自选股/重新搜索前保持显示，避免闪烁消失
   setStatus("完成");
   // 按当前视图完整重绘：仅 paint 只更新行情图，模型拟合/未来预测视图的
   // 画布与右侧面板都需同步重渲染（否则点击自选股切换时图和数据不更新）
   window._pin = null;  // 切换股票后旧固定参考线失效，清除
   // 记录查询历史（云端 SQLite，每次打开股票/切换周期记一条）
-  cloudPost("/api/history", {secid: secid || "", name: (data.name || name || "")});
+  cloudPost("/api/history", {secid: secid || "", name: (_curName || name || "")});
   if (view === "fit") { renderFitPanel(); drawFit(); }
   else if (view === "future") { renderFuturePanel(); drawFuture(); }
   else paint(currentType);
@@ -1926,7 +1929,8 @@ async function doKlineSecid(secid, name, period) {
   const timer = setTimeout(() => ctrl.abort(), 90000);
   try {
     const resp = await fetch("/api/kline?secid=" + encodeURIComponent(secid) +
-                             "&start=" + s + "&end=" + e + "&period=" + period, {signal: ctrl.signal});
+                             "&start=" + s + "&end=" + e + "&period=" + period +
+                             "&name=" + encodeURIComponent(name || ""), {signal: ctrl.signal});
     const data = await resp.json();
     if (data.error) {
       // 周期请求失败：用日K缓存前端聚合兜底，保证切换生效

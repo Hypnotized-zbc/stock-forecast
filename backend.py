@@ -314,13 +314,18 @@ def _fetch_kline_sina(secid, start, end):
 
 
 def _sina_stock_name(symbol):
-    """从新浪股票接口取名称（尽力而为，失败返回代码）。"""
+    """从新浪股票接口取名称（尽力而为，失败返回空串——调用方用请求参数 name 兜底）。
+
+    注意：绝不返回 symbol（sh601088 这种内部代码）当名称——
+    曾导致其他电脑上"当前查询"区域显示 sh601088 而不是股票名。
+    """
     try:
         url = ("https://hq.sinajs.cn/list=" + symbol)
         resp = _SESSION.get(url, headers={
             "User-Agent": HEADERS["User-Agent"],
             "Referer": "https://finance.sina.com.cn/",
-        }, timeout=10)
+        }, timeout=4)
+        resp.encoding = "gbk"
         text = resp.text
         # 格式: var hq_str_sh600519="贵州茅台,开盘,昨收,..."
         if "=\"" in text:
@@ -329,7 +334,7 @@ def _sina_stock_name(symbol):
                 return name
     except Exception:
         pass
-    return symbol
+    return ""
 
 
 def ma(values, n):
@@ -1340,6 +1345,7 @@ class Handler(BaseHTTPRequestHandler):
                 start = (params.get("start") or [""])[0].strip()
                 end = (params.get("end") or [""])[0].strip()
                 period = (params.get("period") or ["day"])[0].strip() or "day"
+                req_name = (params.get("name") or [""])[0].strip()
                 if period not in ("day", "week", "month"):
                     period = "day"
                 if not secid or not start or not end:
@@ -1355,6 +1361,10 @@ class Handler(BaseHTTPRequestHandler):
                 if not rows:
                     self._send_json({"error": "未获取到K线数据"}, 404)
                     return
+                # 名称兜底：接口没取到名称/取到内部代码（sh601088 格式）时，
+                # 用前端搜索候选传来的 name（用户点选时的正确股票名）
+                if not name or re.match(r"^[a-z]{2}\d{6}$", name):
+                    name = req_name or name
                 data = build_chart_data(rows)
                 data["name"] = name
                 # 三种模型拟合 + 未来10日预测（纯 Python，零第三方依赖）
