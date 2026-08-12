@@ -9,14 +9,18 @@ mkdir -p "$BACKUP_DIR"
 
 # 要备份的文件（新增源码文件记得加到这里）
 FILES=(
+  app.py
+  backend.py
+  static/index.html
   crawler/core.py
   crawler/parsers.py
   crawler/__init__.py
-  crawler_stock.py
   examples/demo.py
   tools/upload_github.py
+  tests/test_backend.py
   requirements.txt
   README.md
+  UPDATES.md
 )
 
 for f in "${FILES[@]}"; do

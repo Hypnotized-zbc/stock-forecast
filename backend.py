@@ -1104,12 +1104,40 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def open_browser(url):
-    """用 Windows 默认浏览器打开本地地址。"""
-    try:
-        import subprocess
-        subprocess.Popen(["explorer.exe", url])
-    except Exception as exc:
-        print(f"[!] 自动打开浏览器失败，请手动访问: {url} ({exc})")
+    """自动打开默认浏览器（WSL 下经 explorer.exe 调 Windows 浏览器）。"""
+    import os
+    import shutil
+    import subprocess
+    import sys
+
+    # 1) Windows 原生：os.startfile 最稳
+    if sys.platform == "win32":
+        try:
+            os.startfile(url)
+            print(f"[i] 已自动打开浏览器: {url}")
+            return
+        except Exception as exc:
+            print(f"[!] 自动打开浏览器失败，请手动访问: {url} ({exc})")
+            return
+
+    # 2) WSL/Linux：explorer.exe → Windows 默认浏览器
+    exe = shutil.which("explorer.exe")
+    if exe:
+        try:
+            subprocess.Popen([exe, url])
+            print(f"[i] 已自动打开浏览器: {url}")
+            return
+        except OSError as exc:
+            if exc.errno == 8:  # Exec format error：WSL interop 注册丢失
+                print("[!] 自动打开浏览器失败：WSL interop 失效（Windows 程序无法执行）")
+                print("    修复（一条命令，需 sudo）：")
+                print("    sudo sh -c 'echo :WSLInterop:M::MZ::/init:PF > /proc/sys/fs/binfmt_misc/register'")
+                print(f"    或直接手动访问: {url}")
+                return
+            print(f"[!] 自动打开浏览器失败，请手动访问: {url} ({exc})")
+            return
+
+    print(f"[!] 未找到 explorer.exe，请手动访问: {url}")
 
 
 def main():

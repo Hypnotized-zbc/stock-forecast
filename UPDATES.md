@@ -1,5 +1,16 @@
 # 更新报告
 
+## v0.13.8 (2026-08-12)
+- 修复自动打开浏览器失败问题（用户反馈"终端显示自动打开浏览器失败需要手动打开"）：
+  - 根因：WSL interop 注册丢失（binfmt_misc 无 WSLInterop 条目）→ 所有 Windows
+    程序（explorer.exe）从 WSL 执行报 Exec format error
+  - open_browser 加固：win32 走 os.startfile；WSL 走 explorer.exe；按 errno 8
+    分支明确提示 WSL interop 失效 + 给出 sudo 修复命令（不再是笼统的"请手动访问"）
+- backup.sh 备份清单更新：补 app.py/backend.py/static/index.html/tests/test_backend.py
+  /UPDATES.md，移除已删除的 crawler_stock.py
+- 验证：py_compile 通过；ad-hoc 脚本实测 open_browser 失败路径输出正确
+  （真实坏环境验证，非 mock）
+
 ## v0.13.7 (2026-08-11)
 - AI 解读 token 增加（用户要求，减小被截断概率）：max_tokens 600 → 1200
   （finish_reason=="length" 截断重试机制保留，双保险）
