@@ -1487,11 +1487,16 @@ class Handler(BaseHTTPRequestHandler):
                 password = body.get("password") or ""
                 captcha_id = (body.get("captcha_id") or "").strip()
                 captcha = (body.get("captcha") or "").strip().upper()
-                if not (3 <= len(username) <= 20):
-                    self._send_json({"error": "用户名长度需 3-20 个字符"}, 400)
+                # 用户名：仅字母/数字/下划线，长度 3-20
+                if not re.fullmatch(r"[A-Za-z0-9_]{3,20}", username):
+                    self._send_json({"error": "用户名仅限字母/数字/下划线，长度 3-20 个字符"}, 400)
                     return
-                if len(password) < 6:
-                    self._send_json({"error": "密码至少 6 位"}, 400)
+                # 密码：仅字母/数字（无特殊字符），长度 8-20，且必须含大写+小写+数字
+                if not re.fullmatch(r"[A-Za-z0-9]{8,20}", password):
+                    self._send_json({"error": "密码仅限字母/数字，长度 8-20 个字符"}, 400)
+                    return
+                if not (re.search(r"[A-Z]", password) and re.search(r"[a-z]", password) and re.search(r"[0-9]", password)):
+                    self._send_json({"error": "密码必须同时包含大写字母、小写字母和数字"}, 400)
                     return
                 item = _CAPTCHAS.get(captcha_id)
                 if not item or item[1] < time.time():
@@ -1505,7 +1510,7 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     uid_new = db.user_create(username, ph, salt)
                 except Exception:
-                    self._send_json({"error": "用户名已存在"}, 400)
+                    self._send_json({"error": "用户名冲突，该用户名已被注册，请换一个"}, 400)
                     return
                 # 注册即登录
                 token = secrets.token_hex(24)
