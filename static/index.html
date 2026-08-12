@@ -1501,8 +1501,8 @@ function aiCacheKey() {
   const period = t === "kline-week" ? "week" : t === "kline-month" ? "month" : "day";
   return _curSecid + "_" + period;
 }
-let _watch = [];
-try { _watch = JSON.parse(localStorage.getItem("wl") || "[]"); } catch (e) { _watch = []; }
+let _watch = [];  // 自选股列表。未登录恒为空（绝不加载本地 wl，保证打开页面纯净空白）；
+                  // 登录后由 loadWatchFromCloud 以云端为准加载，云端空时才读本地做迁移
 
 function fmtAmount(v) { if (v==null || !(v>0)) return "—"; if (v>=1e8) return (v/1e8).toFixed(2)+"亿"; if (v>=1e4) return (v/1e4).toFixed(2)+"万"; return v; }
 
@@ -1697,12 +1697,17 @@ async function loadWatchFromCloud() {
       if (d.items.length) {
         // 登录后以云端数据为准（账号数据在云端）
         _watch = d.items.map(it => ({secid: it.secid, name: it.name, code: ""}));
-      } else if (_watch.length) {
-        // 云端为空但本地有自选股（如早期未登录时代录入）→ 迁移到当前账号云端
-        for (const w of _watch) {
-          if (w && w.secid) cloudPost("/api/watchlist", {action: "add", secid: w.secid, name: w.name || w.secid});
+      } else {
+        // 云端为空：读取本地 wl（早期未登录时代录入的自选股）迁移到当前账号云端
+        let local = [];
+        try { local = JSON.parse(localStorage.getItem("wl") || "[]"); } catch (e) { local = []; }
+        if (local.length) {
+          _watch = local.filter(w => w && w.secid);
+          for (const w of _watch) {
+            cloudPost("/api/watchlist", {action: "add", secid: w.secid, name: w.name || w.secid});
+          }
+          setStatus("已将本机 " + _watch.length + " 只自选股同步到账号 " + _username);
         }
-        setStatus("已将本机 " + _watch.length + " 只自选股同步到账号 " + _username);
       }
       saveWatch(); renderWatchlist(); refreshAllQuotes();
     }
