@@ -2359,16 +2359,12 @@ document.getElementById("shareBtn").addEventListener("click", () => {
       // 导出下载
       try {
         const a = document.createElement("a");
-        const dataUrl = c.toDataURL("image/png");
-        a.href = dataUrl;
+        a.href = c.toDataURL("image/png");
         a.download = "行情卡片_" + (_curName || "stock") + "_" + D.dates[last] + ".png";
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        // 自动打开图片预览（headless/被拦截时捕获 null 给提示）
-        const w = window.open(dataUrl, "_blank");
-        if (w) setStatus("卡片已导出为 PNG 图片文件，并已自动打开");
-        else setStatus("卡片已导出为 PNG 图片文件（浏览器拦截自动打开，请查看下载）");
+        setStatus("卡片已导出为 PNG 图片文件");
       } catch (e2) { setStatus("导出失败: " + e2); }
     };
     img.onerror = () => setStatus("图表图片读取失败");
