@@ -104,7 +104,8 @@ stock-forecast/
 ├── app.py              # 启动入口（python3 app.py）
 ├── backend.py          # 后端：数据源/指标/模型/HTTP API/AI 解读
 ├── db.py               # 数据库：SQLite 三表（自选股/AI缓存/历史）
-├── static/index.html   # 前端：页面 + Canvas 图表 + 交互
+├── static/login.html    # 登录/注册页（/）
+├── static/index.html    # 功能页（/app）：页面 + Canvas 图表 + 交互
 ├── tests/test_backend.py  # pytest 单元测试
 ├── backups/            # 每次改动前的版本备份
 ├── data/               # K 线 CSV 留档（自动生成）

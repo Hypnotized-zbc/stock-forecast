@@ -13,6 +13,7 @@ FILES=(
   backend.py
   db.py
   static/index.html
+  static/login.html
   crawler/core.py
   crawler/parsers.py
   crawler/__init__.py

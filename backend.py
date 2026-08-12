@@ -40,15 +40,24 @@ import db
 import requests
 
 # 东方财富接口（token 是公开固定值，官网页面也在用）
-# 前端页面（static/index.html），启动时读取一次并缓存
+# 前端页面（static/index.html、static/login.html），启动时读取一次并缓存
 _HTML_PATH = Path(__file__).resolve().parent / "static" / "index.html"
+_LOGIN_PATH = Path(__file__).resolve().parent / "static" / "login.html"
 _index_html_cache = None
+_login_html_cache = None
 
 def load_index_html():
     global _index_html_cache
     if _index_html_cache is None:
         _index_html_cache = _HTML_PATH.read_text(encoding="utf-8")
     return _index_html_cache
+
+
+def load_login_html():
+    global _login_html_cache
+    if _login_html_cache is None:
+        _login_html_cache = _LOGIN_PATH.read_text(encoding="utf-8")
+    return _login_html_cache
 
 
 SEARCH_API = "https://searchapi.eastmoney.com/api/suggest/get"
@@ -1333,6 +1342,10 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             if path == "/":
+                # 登录/注册页（未登录入口）；功能页在 /app
+                self._send_html(load_login_html())
+            elif path == "/app" or path == "/index.html":
+                # 功能页（需登录，前端未登录自动跳回 /）
                 self._send_html(load_index_html())
             elif path == "/api/search":
                 q = (params.get("q") or [""])[0].strip()

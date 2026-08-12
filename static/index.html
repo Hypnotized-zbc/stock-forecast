@@ -132,9 +132,7 @@
 <div class="header">
   <div style="display:flex;justify-content:space-between;align-items:center">
     <h2>股票历史数据查询</h2>
-    <div id="authArea" style="font-size:13px">
-      <button id="loginBtn" style="padding:3px 14px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer">登录 / 注册</button>
-    </div>
+    <div id="authArea" style="font-size:13px"><span style="color:#9ca3af">请登录</span></div>
   </div>
   <div class="query-row">
     <label for="stockInput">查询股票：</label>
@@ -220,27 +218,7 @@
     </div>
   </div>
 </div>
-<div id="authModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.45);z-index:2000;justify-content:center;align-items:flex-start;padding-top:8vh">
-  <div style="background:#fff;border-radius:12px;padding:22px 26px;width:340px;box-shadow:0 10px 40px rgba(0,0,0,.2)">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-      <div style="display:flex;gap:4px">
-        <button id="authTabLogin" style="padding:5px 16px;border:1px solid #d1d5db;border-radius:6px;background:#2563eb;color:#fff;cursor:pointer;font-size:14px">登录</button>
-        <button id="authTabReg" style="padding:5px 16px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;font-size:14px;color:#4b5563">注册</button>
-      </div>
-      <button id="authClose" style="border:none;background:none;font-size:18px;cursor:pointer;color:#9ca3af">✕</button>
-    </div>
-    <div id="authForm" style="display:flex;flex-direction:column;gap:10px">
-      <input id="authUsername" type="text" placeholder="用户名（3-20 个字符）" style="padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px">
-      <input id="authPassword" type="password" placeholder="密码（至少 6 位）" style="padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px">
-      <div id="captchaRow" style="display:none;align-items:center;gap:8px">
-        <input id="authCaptcha" type="text" placeholder="验证码" style="padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;width:110px;text-transform:uppercase">
-        <img id="captchaImg" style="height:38px;border:1px solid #e5e7eb;border-radius:6px;cursor:pointer" title="看不清？点一下换一张">
-      </div>
-      <div id="authMsg" style="color:#c0392b;font-size:12px;min-height:16px"></div>
-      <button id="authSubmit" style="padding:9px;border:none;border-radius:6px;background:#2563eb;color:#fff;cursor:pointer;font-size:14px">登录</button>
-    </div>
-  </div>
-</div>
+<div id="authModal" style="display:none"></div>
 <script>
 "use strict";
 const UP = "#e03434", DOWN = "#089981";
@@ -1636,7 +1614,7 @@ function renderWatchQuotes(map) {
   }
 }
 function addWatch(secid, name, code) {
-  if (!_token) { setStatus("请先登录后再添加自选股"); openAuthModal("login"); return; }
+  if (!_token) { setStatus("请先登录后再添加自选股"); location.href = "/"; return; }
   if (_watch.some(w => w.secid === secid)) { setStatus("已在自选中"); return; }
   _watch.push({secid: secid, name: name, code: code});
   saveWatch(); renderWatchlist();
@@ -1668,8 +1646,8 @@ function handleAuthFail() {
   if (_token) {
     _token = ""; _username = "";
     try { localStorage.removeItem("sf_token"); localStorage.removeItem("sf_user"); } catch (e) {}
-    renderAuthArea();
-    setStatus("登录已过期，请重新登录");
+    // 登录失效（过期/被顶号）→ 回登录页
+    location.href = "/";
   }
 }
 
@@ -1715,12 +1693,13 @@ async function loadWatchFromCloud() {
       saveWatch(); renderWatchlist(); refreshAllQuotes();
     }
   } else {
-    // 未登录：打开网站即弹出登录/注册窗口
-    setTimeout(() => openAuthModal("login"), 300);
+    // 未登录：功能页不能访问，跳回登录/注册页
+    location.href = "/";
   }
 }
 
-// 登录态 UI：未登录显示"登录/注册"，已登录显示用户名 + 退出
+// 登录态 UI：功能页必然已登录（未登录会被上面跳回 /），
+// 这里只显示用户名 + 退出；退出后清空本地数据并回登录页
 function renderAuthArea() {
   const area = document.getElementById("authArea");
   if (_username) {
@@ -1735,85 +1714,13 @@ function renderAuthArea() {
       try { localStorage.removeItem("wl"); } catch (e) {}
       renderAuthArea();
       renderWatchlist();
-      setStatus("已退出登录");
+      // 退出登录 → 返回登录/注册页
+      location.href = "/";
     });
   } else {
-    area.innerHTML = "<button id='loginBtn' style='padding:3px 14px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer'>登录 / 注册</button>";
-    document.getElementById("loginBtn").addEventListener("click", () => openAuthModal("login"));
+    area.innerHTML = "<span style='color:#9ca3af'>请登录</span>";
   }
 }
-
-// ---- 登录/注册模态框 ----
-let _authMode = "login";       // login | register
-let _captchaId = "";
-function openAuthModal(mode) {
-  _authMode = mode || "login";
-  document.getElementById("authModal").style.display = "flex";
-  setAuthTab();
-  loadCaptcha();
-}
-function closeAuthModal() {
-  document.getElementById("authModal").style.display = "none";
-}
-function setAuthTab() {
-  const isReg = _authMode === "register";
-  document.getElementById("authTabLogin").style.background = isReg ? "#fff" : "#2563eb";
-  document.getElementById("authTabLogin").style.color = isReg ? "#4b5563" : "#fff";
-  document.getElementById("authTabReg").style.background = isReg ? "#2563eb" : "#fff";
-  document.getElementById("authTabReg").style.color = isReg ? "#fff" : "#4b5563";
-  document.getElementById("captchaRow").style.display = isReg ? "flex" : "none";
-  document.getElementById("authSubmit").textContent = isReg ? "注册" : "登录";
-  document.getElementById("authMsg").textContent = "";
-  document.getElementById("authUsername").value = "";
-  document.getElementById("authPassword").value = "";
-  document.getElementById("authCaptcha").value = "";
-}
-async function loadCaptcha() {
-  try {
-    const d = await (await fetch("/api/captcha")).json();
-    _captchaId = d.captcha_id;
-    document.getElementById("captchaImg").src = d.svg;
-  } catch (e) { /* 静默 */ }
-}
-function authSubmit() {
-  const username = document.getElementById("authUsername").value.trim();
-  const password = document.getElementById("authPassword").value;
-  const captcha = document.getElementById("authCaptcha").value.trim();
-  const msg = document.getElementById("authMsg");
-  const doFetch = async (path, body) => {
-    try {
-      const r = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
-      const d = await r.json();
-      if (!r.ok) { msg.textContent = d.error || "请求失败"; if (_authMode === "register") loadCaptcha(); return; }
-      if (d.token) {
-        _token = d.token; _username = d.username || username;
-        try { localStorage.setItem("sf_token", _token); localStorage.setItem("sf_user", _username); } catch (e) {}
-        closeAuthModal();
-        renderAuthArea();
-        setStatus("欢迎，" + _username);
-        loadWatchFromCloud();
-      }
-    } catch (e) { msg.textContent = "网络错误"; }
-  };
-  if (_authMode === "register") {
-    if (username.length < 3 || username.length > 20) { msg.textContent = "用户名长度需 3-20 个字符"; return; }
-    if (password.length < 6) { msg.textContent = "密码至少 6 位"; return; }
-    if (!captcha) { msg.textContent = "请输入验证码"; return; }
-    doFetch("/api/register", {username, password, captcha_id: _captchaId, captcha});
-  } else {
-    if (!username || !password) { msg.textContent = "请输入用户名和密码"; return; }
-    doFetch("/api/login", {username, password});
-  }
-}
-document.getElementById("authClose").addEventListener("click", closeAuthModal);
-document.getElementById("authTabLogin").addEventListener("click", () => { _authMode = "login"; setAuthTab(); });
-document.getElementById("authTabReg").addEventListener("click", () => { _authMode = "register"; setAuthTab(); loadCaptcha(); });
-document.getElementById("authSubmit").addEventListener("click", authSubmit);
-document.getElementById("captchaImg").addEventListener("click", loadCaptcha);
-document.getElementById("authModal").addEventListener("click", e => { if (e.target === e.currentTarget) closeAuthModal(); });
-// Enter 提交
-document.getElementById("authPassword").addEventListener("keydown", e => { if (e.key === "Enter") authSubmit(); });
-document.getElementById("authCaptcha").addEventListener("keydown", e => { if (e.key === "Enter") authSubmit(); });
 
 // ---- K线缓存：已下载过的股票（含自选股）当日不再重复下载 ----
 function cacheKey(secid, period) {

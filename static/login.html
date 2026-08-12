@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>登录 - 股票历史数据查询</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Microsoft YaHei", sans-serif;
+    margin: 0; min-height: 100vh;
+    background: linear-gradient(135deg, #f7f8fa 0%, #e8eef7 100%);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .card {
+    width: 380px; max-width: 92vw;
+    background: #fff; border-radius: 14px;
+    box-shadow: 0 10px 40px rgba(0,0,0,.12);
+    padding: 32px 30px 26px;
+  }
+  .logo { text-align: center; margin-bottom: 22px; }
+  .logo h1 { font-size: 22px; margin: 0 0 4px; color: #111827; }
+  .logo p { font-size: 12px; color: #9ca3af; margin: 0; }
+  .tabs { display: flex; margin-bottom: 18px; border-bottom: 1px solid #e5e7eb; }
+  .tab {
+    flex: 1; padding: 10px 0; text-align: center; cursor: pointer;
+    border: none; background: none; font-size: 15px; color: #4b5563;
+    border-bottom: 2px solid transparent;
+  }
+  .tab.active { color: #2563eb; border-bottom-color: #2563eb; font-weight: 600; }
+  .field { margin-bottom: 14px; }
+  .field input {
+    width: 100%; padding: 10px 12px;
+    border: 1px solid #d1d5db; border-radius: 8px;
+    font-size: 14px; outline: none; transition: border .15s;
+  }
+  .field input:focus { border-color: #2563eb; }
+  .captcha-row { display: flex; gap: 10px; }
+  .captcha-row input { flex: 1; text-transform: uppercase; }
+  .captcha-row img {
+    height: 40px; border: 1px solid #e5e7eb; border-radius: 8px;
+    cursor: pointer; background: #f9fafb;
+  }
+  .msg { color: #c0392b; font-size: 12px; min-height: 18px; margin-bottom: 8px; }
+  .msg.ok { color: #16a34a; }
+  .submit {
+    width: 100%; padding: 11px; border: none; border-radius: 8px;
+    background: #2563eb; color: #fff; font-size: 15px; cursor: pointer;
+    transition: background .15s;
+  }
+  .submit:hover { background: #1d4ed8; }
+  .submit:disabled { background: #93c5fd; cursor: not-allowed; }
+  .foot { text-align: center; margin-top: 14px; font-size: 12px; color: #9ca3af; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">
+    <h1>股票历史数据查询</h1>
+    <p>登录后使用自选股 · AI 解读 · 数据云端同步</p>
+  </div>
+  <div class="tabs">
+    <button class="tab active" id="tabLogin">登录</button>
+    <button class="tab" id="tabReg">注册</button>
+  </div>
+  <div id="formArea">
+    <div class="field"><input id="authUsername" type="text" placeholder="用户名（3-20 个字符）" autocomplete="username"></div>
+    <div class="field"><input id="authPassword" type="password" placeholder="密码（至少 6 位）" autocomplete="current-password"></div>
+    <div class="field captcha-row" id="captchaRow" style="display:none">
+      <input id="authCaptcha" type="text" placeholder="验证码" autocomplete="off">
+      <img id="captchaImg" title="看不清？点一下换一张">
+    </div>
+    <div class="msg" id="authMsg"></div>
+    <button class="submit" id="authSubmit">登录</button>
+  </div>
+  <div class="foot">仅供学习研究，不构成投资建议</div>
+</div>
+<script>
+let _authMode = "login";
+let _captchaId = "";
+const $ = id => document.getElementById(id);
+
+function setTab(mode) {
+  _authMode = mode;
+  $("tabLogin").classList.toggle("active", mode === "login");
+  $("tabReg").classList.toggle("active", mode === "register");
+  $("captchaRow").style.display = mode === "register" ? "flex" : "none";
+  $("authSubmit").textContent = mode === "register" ? "注册" : "登录";
+  $("authMsg").textContent = "";
+  $("authMsg").className = "msg";
+  $("authUsername").value = "";
+  $("authPassword").value = "";
+  $("authCaptcha").value = "";
+  $("authPassword").autocomplete = mode === "register" ? "new-password" : "current-password";
+  if (mode === "register") loadCaptcha();
+}
+$("tabLogin").addEventListener("click", () => setTab("login"));
+$("tabReg").addEventListener("click", () => setTab("register"));
+
+async function loadCaptcha() {
+  try {
+    const d = await (await fetch("/api/captcha")).json();
+    _captchaId = d.captcha_id;
+    $("captchaImg").src = d.svg;
+  } catch (e) { /* 静默 */ }
+}
+$("captchaImg").addEventListener("click", loadCaptcha);
+
+async function authSubmit() {
+  const username = $("authUsername").value.trim();
+  const password = $("authPassword").value;
+  const captcha = $("authCaptcha").value.trim();
+  const msg = $("authMsg");
+  const btn = $("authSubmit");
+  btn.disabled = true;
+  try {
+    let path, body;
+    if (_authMode === "register") {
+      if (username.length < 3 || username.length > 20) { msg.textContent = "用户名长度需 3-20 个字符"; btn.disabled = false; return; }
+      if (password.length < 6) { msg.textContent = "密码至少 6 位"; btn.disabled = false; return; }
+      if (!captcha) { msg.textContent = "请输入验证码"; btn.disabled = false; return; }
+      path = "/api/register";
+      body = {username, password, captcha_id: _captchaId, captcha};
+    } else {
+      if (!username || !password) { msg.textContent = "请输入用户名和密码"; btn.disabled = false; return; }
+      path = "/api/login";
+      body = {username, password};
+    }
+    const r = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    const d = await r.json();
+    if (!r.ok) {
+      msg.textContent = d.error || "请求失败";
+      if (_authMode === "register") loadCaptcha();
+      btn.disabled = false;
+      return;
+    }
+    if (d.token) {
+      try {
+        localStorage.setItem("sf_token", d.token);
+        localStorage.setItem("sf_user", d.username || username);
+      } catch (e) {}
+      msg.className = "msg ok";
+      msg.textContent = "登录成功，正在进入...";
+      setTimeout(() => { location.href = "/app"; }, 400);
+    } else {
+      btn.disabled = false;
+      msg.textContent = d.error || "未知错误";
+    }
+  } catch (e) {
+    btn.disabled = false;
+    msg.textContent = "网络错误，请重试";
+  }
+}
+$("authSubmit").addEventListener("click", authSubmit);
+$("authPassword").addEventListener("keydown", e => { if (e.key === "Enter") authSubmit(); });
+$("authCaptcha").addEventListener("keydown", e => { if (e.key === "Enter") authSubmit(); });
+
+// 已登录用户访问登录页 → 直接进功能页
+(async function () {
+  try {
+    const t = localStorage.getItem("sf_token");
+    if (t) {
+      const r = await fetch("/api/me", {headers: {"Authorization": "Bearer " + t}});
+      if (r.ok) { location.href = "/app"; return; }
+    }
+  } catch (e) {}
+})();
+</script>
+</body>
+</html>
