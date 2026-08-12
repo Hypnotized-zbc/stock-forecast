@@ -2296,7 +2296,7 @@ document.getElementById("shareBtn").addEventListener("click", () => {
   ];
   // 绘制卡片 → 导出 PNG 下载
   const draw = () => {
-    const W = 560, PAD = 18;
+    const W = 560, PAD = 18, SCALE = 2;  // SCALE: 物理像素放大倍数（高清导出）
     const cw = W - PAD * 2;
     const img = new Image();
     img.onload = () => {
@@ -2304,8 +2304,9 @@ document.getElementById("shareBtn").addEventListener("click", () => {
       const titleH = 42, subH = 24, rowH = 33, footH = 30;
       const H = PAD * 2 + titleH + subH + imgH + rows.length * rowH + footH;
       const c = document.createElement("canvas");
-      c.width = W; c.height = H;
+      c.width = W * SCALE; c.height = H * SCALE;   // 物理像素放大，清晰度翻倍
       const g = c.getContext("2d");
+      g.scale(SCALE, SCALE);                        // 逻辑坐标不变，整体放大绘制
       // 背景
       g.fillStyle = "#f7f8fa"; g.fillRect(0, 0, W, H);
       // 白卡片（圆角）
