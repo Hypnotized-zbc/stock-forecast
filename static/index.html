@@ -2278,12 +2278,12 @@ document.getElementById("compareOverlay").addEventListener("click", e => {
   document.getElementById("cmpFollowTip").style.display = "none";
   if (_cmpState) drawCompare();
 });
-// ---- 行情卡片分享 ----
+// ---- 行情卡片分享（导出 PNG 图片文件） ----
 document.getElementById("shareBtn").addEventListener("click", () => {
   if (!D || !n) { setStatus("请先查询股票再分享卡片"); return; }
   const last = n - 1;
-  let img;
-  try { img = cv.toDataURL("image/png"); } catch (e) { setStatus("图表截图失败: " + e); return; }
+  let chartDataUrl;
+  try { chartDataUrl = cv.toDataURL("image/png"); } catch (e) { setStatus("图表截图失败: " + e); return; }
   const v = x => x != null ? fmt(x) : "—";
   const rows = [
     ["最新收盘", v(D.closes[last])],
@@ -2294,23 +2294,78 @@ document.getElementById("shareBtn").addEventListener("click", () => {
     ["DIF / DEA", (D.macd_dif && D.macd_dif[last] != null ? D.macd_dif[last].toFixed(3) : "—") + " / " +
                   (D.macd_dea && D.macd_dea[last] != null ? D.macd_dea[last].toFixed(3) : "—")],
   ];
-  const w = window.open("", "_blank", "width=560,height=780");
-  if (!w) { setStatus("浏览器阻止了弹窗，请允许本站弹出窗口"); return; }
-  w.document.write(
-    "<html><head><meta charset='utf-8'><title>行情卡片 " + _curName + "</title>" +
-    "<style>body{font-family:'Microsoft YaHei',sans-serif;margin:20px;background:#f7f8fa}" +
-    ".card{max-width:520px;margin:auto;background:#fff;border-radius:12px;padding:18px;box-shadow:0 2px 12px rgba(0,0,0,.1)}" +
-    "h2{margin:0 0 4px;font-size:20px}.sub{color:#888;font-size:13px;margin-bottom:12px}" +
-    "table{width:100%;border-collapse:collapse;font-size:14px;margin-top:12px}" +
-    "td{padding:6px 8px;border-bottom:1px solid #f0f0f0}td:last-child{text-align:right;font-weight:600}" +
-    "img{width:100%;border-radius:8px;margin-top:12px}" +
-    ".foot{color:#aaa;font-size:11px;text-align:center;margin-top:14px}</style></head><body>" +
-    "<div class='card'><h2>" + _curName + " <span style='font-size:13px;color:#888'>" + (_curSecid || "") + "</span></h2>" +
-    "<div class='sub'>" + D.dates[0] + " ~ " + D.dates[last] + " · " + n + " 个交易日 · " + fmtTime(Date.now()) + "</div>" +
-    "<img src='" + img + "'>" +
-    "<table>" + rows.map(r => "<tr><td>" + r[0] + "</td><td>" + r[1] + "</td></tr>").join("") + "</table>" +
-    "<div class='foot'>由 stock-forecast 生成 · 仅供学习研究，不构成投资建议</div></div></body></html>");
-  w.document.close();
+  // 绘制卡片 → 导出 PNG 下载
+  const draw = () => {
+    const W = 560, PAD = 18;
+    const cw = W - PAD * 2;
+    const img = new Image();
+    img.onload = () => {
+      const imgH = Math.round(cw * img.height / img.width);
+      const titleH = 42, subH = 24, rowH = 33, footH = 30;
+      const H = PAD * 2 + titleH + subH + imgH + rows.length * rowH + footH;
+      const c = document.createElement("canvas");
+      c.width = W; c.height = H;
+      const g = c.getContext("2d");
+      // 背景
+      g.fillStyle = "#f7f8fa"; g.fillRect(0, 0, W, H);
+      // 白卡片（圆角）
+      const rr = (x, y, w, h, r) => {
+        g.beginPath();
+        g.moveTo(x + r, y);
+        g.arcTo(x + w, y, x + w, y + h, r);
+        g.arcTo(x + w, y + h, x, y + h, r);
+        g.arcTo(x, y + h, x, y, r);
+        g.arcTo(x, y, x + w, y, r);
+        g.closePath();
+        g.fill();
+      };
+      g.fillStyle = "#fff"; rr(6, 6, W - 12, H - 12, 12);
+      let y = PAD + 6;
+      // 标题：名称 + 代码
+      g.textAlign = "left"; g.textBaseline = "top";
+      g.fillStyle = "#111827"; g.font = "bold 20px 'Microsoft YaHei', sans-serif";
+      g.fillText(_curName || "", PAD, y);
+      g.fillStyle = "#888"; g.font = "13px 'Microsoft YaHei', sans-serif";
+      g.fillText(_curSecid || "", PAD + 170, y + 6);
+      y += titleH;
+      // 副标题：日期范围
+      g.fillStyle = "#888"; g.font = "13px 'Microsoft YaHei', sans-serif";
+      g.fillText(D.dates[0] + " ~ " + D.dates[last] + " · " + n + " 个交易日 · " + fmtTime(Date.now()), PAD, y);
+      y += subH;
+      // 图表
+      g.drawImage(img, PAD, y, cw, imgH);
+      y += imgH + 6;
+      // 指标表格
+      for (const [k, val] of rows) {
+        g.strokeStyle = "#f0f0f0"; g.beginPath(); g.moveTo(PAD, y + rowH - 1); g.lineTo(PAD + cw, y + rowH - 1); g.stroke();
+        g.fillStyle = "#374151"; g.font = "14px 'Microsoft YaHei', sans-serif";
+        g.fillText(k, PAD, y + 6);
+        g.fillStyle = "#111827"; g.font = "bold 14px 'Microsoft YaHei', sans-serif";
+        g.textAlign = "right";
+        g.fillText(val, PAD + cw, y + 6);
+        g.textAlign = "left";
+        y += rowH;
+      }
+      // 页脚
+      g.fillStyle = "#aaa"; g.font = "11px 'Microsoft YaHei', sans-serif";
+      g.textAlign = "center";
+      g.fillText("由 stock-forecast 生成 · 仅供学习研究，不构成投资建议", W / 2, H - footH + 8);
+      g.textAlign = "left";
+      // 导出下载
+      try {
+        const a = document.createElement("a");
+        a.href = c.toDataURL("image/png");
+        a.download = "行情卡片_" + (_curName || "stock") + "_" + D.dates[last] + ".png";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setStatus("卡片已导出为 PNG 图片文件");
+      } catch (e2) { setStatus("导出失败: " + e2); }
+    };
+    img.onerror = () => setStatus("图表图片读取失败");
+    img.src = chartDataUrl;
+  };
+  draw();
 });
 // 关闭/离开页面立即停止本地服务（sendBeacon 在页面卸载时可靠发送）
 window.addEventListener("pagehide", () => {
