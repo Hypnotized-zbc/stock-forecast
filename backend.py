@@ -76,6 +76,27 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 _SESSION = requests.Session()  # 复用连接，减少被远端断开的概率
 
 
+def _parse_json_text(text):
+    """解析东财响应：兼容纯 JSON 和 JSONP（jQuery123({...}) 回调包裹）。
+
+    东财 searchapi 对不同来源可能返回 JSONP（服务器/云 IP 段实测返回
+    jQuery3510...({...})，本机直连返回纯 JSON），resp.json() 遇 JSONP
+    直接抛 ValueError('Expecting value...')——必须剥掉回调外壳再解析。
+    """
+    t = (text or "").strip()
+    if not t:
+        raise ValueError("空响应")
+    if t[0] in "[{":
+        return json.loads(t)
+    i = t.find("(")
+    j = t.rfind(")")
+    if 0 < i < j:
+        inner = t[i + 1:j].strip()
+        if inner:
+            return json.loads(inner)
+    raise ValueError(f"无法解析响应: {t[:80]!r}")
+
+
 def get_json(url, params, retries=4):
     """GET JSON，失败重试。
 
@@ -87,7 +108,7 @@ def get_json(url, params, retries=4):
         try:
             resp = _SESSION.get(url, params=params, headers=HEADERS, timeout=10)
             resp.raise_for_status()
-            return resp.json()
+            return _parse_json_text(resp.text)
         except (requests.RequestException, ValueError) as exc:
             last_err = exc
             print(f"[!] 请求失败(第{attempt}/{retries}次): {exc}")

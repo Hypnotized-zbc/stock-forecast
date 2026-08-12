@@ -1,5 +1,15 @@
 # 更新报告
 
+## v0.16.1 (2026-08-12)
+- 修复云服务器上搜索失败（用户反馈：搜索提示"Expecting value: line 1 column 1"）：
+  - 根因：东财 searchapi 对不同来源返回格式不同——本机直连返回纯 JSON，
+    云服务器 IP 段返回 JSONP（jQuery3510...({...}) 回调包裹）。
+    resp.json() 遇 JSONP 直接抛 ValueError → 4 次重试全败 → 搜索失败
+  - 修复：get_json 改用 _parse_json_text——兼容纯 JSON 和 JSONP
+    （剥掉 `函数名(...)` 外壳再 json.loads），其余接口（K线/行情）同步受益
+- 验证：ad-hoc 8 项全过（纯JSON/JSONP对象/JSONP数组/空白/空响应/垃圾内容/
+  get_json 端到端模拟服务器JSONP响应/py_compile）
+
 ## v0.16.0 (2026-08-12)
 - 用户登录注册系统（用户要求：登录后使用自己的自选股等数据）：
   - 后端认证：users 表（PBKDF2-SHA256 加盐哈希，不存明文）、注册/登录/登出 API、
