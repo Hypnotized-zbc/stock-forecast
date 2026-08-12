@@ -97,16 +97,17 @@ def _parse_json_text(text):
     raise ValueError(f"无法解析响应: {t[:80]!r}")
 
 
-def get_json(url, params, retries=4):
+def get_json(url, params, retries=4, timeout=10):
     """GET JSON，失败重试。
 
     WSL 网络间歇抖动（东财接口偶发 RemoteDisconnected），重试 4 次、
     指数退避；总等待控制在约 30 秒内，避免浏览器端等待过久。
+    timeout：行情类接口传小值（如 4s）快速失败，尽早切换备用源。
     """
     last_err = None
     for attempt in range(1, retries + 1):
         try:
-            resp = _SESSION.get(url, params=params, headers=HEADERS, timeout=10)
+            resp = _SESSION.get(url, params=params, headers=HEADERS, timeout=timeout)
             resp.raise_for_status()
             return _parse_json_text(resp.text)
         except (requests.RequestException, ValueError) as exc:
@@ -595,7 +596,7 @@ def _quote_eastmoney(secid):
         "secid": secid, "invt": "2", "fltt": "2",
         "fields": "f43,f47,f48,f57,f58,f60,f84,f85,f92,f162,f167,f170,f183",
     }
-    data = get_json(url, params, retries=2)  # 行情类接口快速失败，尽早切换备用源
+    data = get_json(url, params, retries=2, timeout=4)  # 行情类接口快速失败，尽早切换备用源
     d = data.get("data") or {}
     try:
         price = float(d.get("f43"))
@@ -627,7 +628,7 @@ def _quote_sina(secid):
     sym = ("sh" if prefix == "1" else "sz") + code
     url = f"https://hq.sinajs.cn/list={sym}"
     resp = _SESSION.get(url, headers={**HEADERS,
-                                      "Referer": "https://finance.sina.com.cn"}, timeout=10)
+                                      "Referer": "https://finance.sina.com.cn"}, timeout=4)
     resp.raise_for_status()
     resp.encoding = "gbk"
     m = re.search(r'="([^"]*)"', resp.text)
@@ -657,18 +658,23 @@ def _quote_sina(secid):
     }
 
 
-def _fill_fundamentals(q):
+def _fill_fundamentals(q, skip_eastmoney=False):
     """基本面字段（PE/PB/市值）缺失时补齐：先东财单股、再腾讯接口。
 
     保险机制：东财批量成功但个别字段缺失（数据源偶发缺字段）同样执行，
-    避免"一开始没拿到后面一直拿不到"。
+    避免"一开始没拿到后面一直拿不到"。东财单股也走短超时（4s），
+    防止批量失败后的补齐链路再次长时间等待。
+    skip_eastmoney=True：东财批量已失败（走新浪回退）时跳过东财单股，
+    直接腾讯补齐——避免批量失败后每只股票再等东财 2 次重试+退避。
     """
     if q is None or None not in (q.get("pe"), q.get("pb"), q.get("mktcap")):
         return q
-    try:
-        em = _quote_eastmoney(q["secid"])
-    except Exception:
-        em = None
+    em = None
+    if not skip_eastmoney:
+        try:
+            em = _quote_eastmoney(q["secid"])
+        except Exception:
+            em = None
     if not em or all(v is None for v in (em.get("pe"), em.get("pb"), em.get("mktcap"))):
         em = _quote_tencent(q["secid"])
     if em:
@@ -678,8 +684,62 @@ def _fill_fundamentals(q):
     return q
 
 
+def _sina_quotes_batch(secids):
+    """新浪批量实时行情（一次请求全部股票，替代逐只串行回退）。
+
+    新浪 hq.sinajs.cn/list=sh601088,sz000001 一次返回多行，速度快数倍。
+    仅价格/量额，无基本面（字段置 None）；失败返回 None。
+    """
+    if not secids:
+        return []
+    syms = []
+    for s in secids:
+        prefix, code = s.split(".")
+        syms.append(("sh" if prefix == "1" else "sz") + code)
+    url = "https://hq.sinajs.cn/list=" + ",".join(syms)
+    try:
+        resp = _SESSION.get(url, headers={**HEADERS,
+                                          "Referer": "https://finance.sina.com.cn"},
+                            timeout=4)
+        resp.raise_for_status()
+        resp.encoding = "gbk"
+    except Exception as exc:
+        print(f"[quotes] 新浪批量失败: {exc}")
+        return None
+    out = []
+    for line in resp.text.strip().splitlines():
+        m = re.search(r'hq_str_([a-z]{2}\d{6})="([^"]*)"', line)
+        if not m:
+            continue
+        sym, payload = m.group(1), m.group(2)
+        parts = payload.split(",")
+        if len(parts) < 32:
+            continue
+        try:
+            prev = float(parts[2])
+            price = float(parts[3])
+        except (ValueError, IndexError):
+            continue
+        if not price or price <= 0:
+            continue
+        secid = ("1." if sym.startswith("sh") else "0.") + sym[2:]
+        out.append({
+            "secid": secid,
+            "name": parts[0],
+            "code": sym[2:],
+            "price": price,
+            "prev_close": prev,
+            "change_pct": (price - prev) / prev * 100 if prev else 0.0,
+            "volume": float(parts[8]) if parts[8] else None,
+            "amount": float(parts[9]) if parts[9] else None,
+            "pe": None, "pb": None, "mktcap": None,
+            "total_shares": None, "float_shares": None, "bps": None,
+        })
+    return out or None
+
+
 def fetch_quotes(secids):
-    """东财 ulist 批量实时行情（含 PE/PB/市值等基本面）；失败回退逐只新浪。"""
+    """东财 ulist 批量实时行情（含 PE/PB/市值等基本面）；失败回退新浪批量、再回退逐只。"""
     secids = [s.strip() for s in secids if s and s.strip()]
     if not secids:
         return []
@@ -689,7 +749,7 @@ def fetch_quotes(secids):
             "secids": ",".join(secids), "fltt": "2", "invt": "2",
             "fields": "f2,f3,f5,f6,f9,f12,f13,f14,f18,f20,f21,f23",
         }
-        data = get_json(url, params, retries=3)  # 3 次重试提高基本面字段(PE/PB)命中率
+        data = get_json(url, params, retries=2, timeout=4)  # 短超时快速失败
         diff = (data.get("data") or {}).get("diff") or []
         out = []
         for it in diff:
@@ -718,10 +778,14 @@ def fetch_quotes(secids):
             return [_fill_fundamentals(q) for q in out]
     except Exception as exc:
         print(f"[quotes] 东财批量失败: {exc}")
-    # 回退：逐只新浪（新浪无 PE/PB/市值字段）→ 依次用东财单股、腾讯接口
-    # 补齐（双备源提高命中率，避免基本面信息缺失）
+    # 回退1：新浪批量（一次请求全部，速度远快于逐只串行）
+    sina = _sina_quotes_batch(secids)
+    if sina:
+        # skip_eastmoney=True：东财批量已失败，补齐直接腾讯，不再等东财单股
+        return [_fill_fundamentals(q, skip_eastmoney=True) for q in sina]
+    # 回退2：逐只东财→新浪（最后兜底）
     fallback = [q for q in (fetch_quote(s) for s in secids) if q]
-    return [_fill_fundamentals(q) for q in fallback]
+    return [_fill_fundamentals(q, skip_eastmoney=True) for q in fallback]
 
 
 def _tencent_code(secid):
