@@ -1,5 +1,13 @@
 # 更新报告
 
+## v0.13.9 (2026-08-12)
+- AI 解读面板增加 ✕ 关闭按钮（用户要求）：标题行右侧新增关闭按钮，
+  点击关闭面板（_aiPanelOpen 置 false + display:none），缓存保留，
+  重新打开立即显示缓存
+- 更换 DeepSeek API key（llm_key.txt，已 gitignore 不随仓库上传）；
+  验证：API 直调 HTTP 200、finish=stop、模型正常回复
+- 验证：JS node --check 语法通过
+
 ## v0.13.8 (2026-08-12)
 - 修复自动打开浏览器失败问题（用户反馈"终端显示自动打开浏览器失败需要手动打开"）：
   - 根因：WSL interop 注册丢失（binfmt_misc 无 WSLInterop 条目）→ 所有 Windows

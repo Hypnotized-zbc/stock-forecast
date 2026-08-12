@@ -1853,10 +1853,13 @@ function switchPeriodData(period) {
     paint("kline");
   }
 }
-// AI 标题（含"重新生成"按钮，点击强制重新请求覆盖缓存）
+// AI 标题（含"重新生成"与"关闭"按钮，点击强制重新请求覆盖缓存 / 关闭面板）
 function aiTitleHtml() {
   return "<div class='ai-title' style='display:flex;align-items:center;gap:8px'>✨ AI 技术解读 · " + (_curName || "") +
-         "<button class='ai-regen' style='margin-left:auto;padding:2px 8px;border:1px solid #d1d5db;border-radius:5px;background:#fff;cursor:pointer;font-size:12px;color:#6b7280' title='重新生成解读（覆盖缓存）'>🔄 重新生成</button></div>";
+         "<span style='margin-left:auto;display:flex;gap:6px'>" +
+         "<button class='ai-regen' style='padding:2px 8px;border:1px solid #d1d5db;border-radius:5px;background:#fff;cursor:pointer;font-size:12px;color:#6b7280' title='重新生成解读（覆盖缓存）'>🔄 重新生成</button>" +
+         "<button class='ai-close' style='padding:2px 8px;border:1px solid #d1d5db;border-radius:5px;background:#fff;cursor:pointer;font-size:12px;color:#6b7280' title='关闭解读窗口'>✕</button>" +
+         "</span></div>";
 }
 
 // 发起 AI 解读：有缓存立即显示（force=true 时强制重新请求），无缓存请求并保存
@@ -1903,9 +1906,13 @@ async function requestAiInsight(force) {
   }
 }
 
-// AI 面板内"重新生成"按钮：强制重新请求并覆盖缓存（修复断句/不完整解读）
+// AI 面板内按钮：重新生成（强制重新请求并覆盖缓存）/ 关闭（×）
 document.getElementById("aiPanel").addEventListener("click", e => {
   if (e.target.closest(".ai-regen")) requestAiInsight(true);
+  if (e.target.closest(".ai-close")) {
+    _aiPanelOpen = false;
+    document.getElementById("aiPanel").style.display = "none";
+  }
 });
 
 document.getElementById("aiBtn").addEventListener("click", () => {
