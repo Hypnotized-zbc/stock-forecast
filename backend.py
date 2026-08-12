@@ -119,10 +119,62 @@ def get_json(url, params, retries=4):
 # ---------------------------------------------------------------------------
 # 搜索与K线（数据层）
 # ---------------------------------------------------------------------------
+TENCENT_SEARCH_API = "https://smartbox.gtimg.cn/s3/"
+
+
+def _tencent_search(name):
+    """腾讯股票搜索备用源（东财对云服务器 IP 段不返回股票数据时回退）。
+
+    返回与东财 search_stock 相同结构的候选列表；失败返回 None（调用方决定回退）。
+    响应格式：v_hint="sh~601088~\\u4e2d\\u56fd\\u795e\\u534e~zgsh~GP-A^sz~000001~..."
+    字段顺序：市场~代码~名称(unicode转义)~拼音~类型；多个结果用 ^ 或 ; 分隔
+    """
+    try:
+        resp = _SESSION.get(TENCENT_SEARCH_API,
+                            params={"v": "2", "q": name, "t": "all"},
+                            headers=HEADERS, timeout=10)
+        resp.raise_for_status()
+        text = resp.text
+        m = re.search(r'v_hint="([^"]*)"', text)
+        if not m or not m.group(1):
+            return None
+        candidates = []
+        for item in re.split(r"[;^]", m.group(1)):
+            parts = item.split("~")
+            if len(parts) < 5:
+                continue
+            market, code, raw_name, pinyin, ctype = parts[0], parts[1], parts[2], parts[3], parts[4]
+            # 只保留沪深 A 股：市场必须 sh/sz 且类型 GP-A（港股 hk/美股 us 也会标 GP，必须排除）
+            if market not in ("sh", "sz") or ctype not in ("GP-A", "GP"):
+                continue
+            if not code.isdigit():  # 美股代码形如 csuay.ps，过滤
+                continue
+            secid = ("1." if market == "sh" else "0.") + code
+            try:
+                name_zh = raw_name.encode("utf-8").decode("unicode_escape")
+            except Exception:
+                name_zh = raw_name
+            candidates.append({
+                "名称": name_zh,
+                "代码": code,
+                "市场": "沪A" if market == "sh" else "深A",
+                "分类": ctype,
+                "secid": secid,
+            })
+        return candidates or None
+    except Exception as exc:
+        print(f"[!] 腾讯搜索备用源失败: {exc}")
+        return None
+
+
 def search_stock(name):
     """按名称/代码搜索，返回候选列表：[{名称, 代码, 市场, 分类, secid}, ...]"""
     params = {"input": name, "type": "14", "token": PUBLIC_TOKEN}
-    data = get_json(SEARCH_API, params)
+    try:
+        data = get_json(SEARCH_API, params)
+    except ConnectionError as exc:
+        print(f"[!] 东财搜索失败，回退腾讯源: {exc}")
+        return _tencent_search(name) or []
     rows = (data.get("QuotationCodeTable") or {}).get("Data") or []
     candidates = []
     for r in rows:
@@ -137,6 +189,10 @@ def search_stock(name):
             "分类": classify,
             "secid": secid,
         })
+    # 东财响应异常（云服务器 IP 段返回无 QuotationCodeTable 的空壳）→ 回退腾讯
+    if not candidates:
+        print("[!] 东财搜索返回空股票结果，回退腾讯源")
+        return _tencent_search(name) or []
     seen, uniq = set(), []
     for c in candidates:
         if c["secid"] in seen:
