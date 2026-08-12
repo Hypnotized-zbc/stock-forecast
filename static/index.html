@@ -1544,20 +1544,15 @@ function setChartData(data, name, secid) {
   n = D.dates.length;
   _curSecid = secid;
   _curName = data.name || name || "";
-  // 当前查询股票醒目标题：名称 + 代码 + 涨跌幅（红涨绿跌）
-  // 涨跌幅不单独抓取——直接从自选股列表数据行同步（syncTitleFromWatch），
-  // 自选行有值标题就有，自选行无数据标题显示 —，两处永远一致
+  // 当前查询股票标题：名称 + 代码（涨跌幅已删除——依赖自选股数据行，未登录/不在自选股时
+  // 永远显示 —，用户多次反馈"显示不出来"，删除不再显示）
   const code = String(secid || "").split(".")[1] || "";
   document.getElementById("curStock").innerHTML =
-    (data.name || name) + "<span class='code'>" + code + "</span>" +
-    "<span class='chg' style='color:#bbb;font-weight:400'>—</span>";
+    (data.name || name) + "<span class='code'>" + code + "</span>";
   document.getElementById("rangeInfo").textContent =
     (data.name || name) + " | " + D.dates[0] + " ~ " + D.dates[n-1] + " | 共 " + n + " 个交易日";
   // 注意：不清空 candidateBox——候选选项在加入自选股/重新搜索前保持显示，避免闪烁消失
   setStatus("完成");
-  // 标题涨跌幅零延迟：立即用自选股列表已有数据同步（_watchQuotes 缓存），
-  // 不等网络请求返回——数据更新刷新是自选股列表的事，标题只做直接显示
-  syncTitleFromWatch();
   // 按当前视图完整重绘：仅 paint 只更新行情图，模型拟合/未来预测视图的
   // 画布与右侧面板都需同步重渲染（否则点击自选股切换时图和数据不更新）
   window._pin = null;  // 切换股票后旧固定参考线失效，清除
@@ -1587,23 +1582,6 @@ function fmtTime(ts) {
 
 function saveWatch() { try { localStorage.setItem("wl", JSON.stringify(_watch)); } catch (e) {} }
 
-// 当前股标题涨跌幅直接从自选股列表数据行同步（不单独抓取当前股）：
-// 自选行有有效行情时标题显示同一数值；自选行无数据时标题显示 —（两处一致）
-function syncTitleFromWatch() {
-  const el = document.querySelector("#curStock .chg");
-  if (!el) return;
-  const q = _watchQuotes[_curSecid];
-  if (_curSecid && q && q.price != null && q.price > 0 && q.change_pct != null) {
-    const up = q.change_pct >= 0;
-    el.textContent = (up ? "+" : "") + q.change_pct.toFixed(2) + "%";
-    el.style.color = up ? UP : DOWN;
-    el.style.fontWeight = "600";
-  } else {
-    el.textContent = "—";
-    el.style.color = "#bbb";
-    el.style.fontWeight = "400";
-  }
-}
 function renderWatchlist() {
   const bar = document.getElementById("watchlist");
   // 未登录时不显示本地自选股缓存（用户数据属于登录用户，未登录只提示登录）
@@ -1653,8 +1631,6 @@ function renderWatchQuotes(map) {
     set("wl-pb", q.pb!=null ? q.pb.toFixed(2) : "—");
     set("wl-cap", fmtAmount(q.mktcap));
   }
-  // 自选行渲染后同步当前股标题涨跌幅（同一份数据，保证两处一致）
-  syncTitleFromWatch();
 }
 function addWatch(secid, name, code) {
   if (!_token) { setStatus("请先登录后再添加自选股"); openAuthModal("login"); return; }
@@ -1718,8 +1694,16 @@ async function loadWatchFromCloud() {
     renderAuthArea();
     const d = await cloudGet("/api/watchlist");
     if (d && Array.isArray(d.items)) {
-      // 登录后以云端数据为准（不合并本地旧缓存——本地可能残留其他账号/未登录数据）
-      _watch = d.items.map(it => ({secid: it.secid, name: it.name, code: ""}));
+      if (d.items.length) {
+        // 登录后以云端数据为准（账号数据在云端）
+        _watch = d.items.map(it => ({secid: it.secid, name: it.name, code: ""}));
+      } else if (_watch.length) {
+        // 云端为空但本地有自选股（如早期未登录时代录入）→ 迁移到当前账号云端
+        for (const w of _watch) {
+          if (w && w.secid) cloudPost("/api/watchlist", {action: "add", secid: w.secid, name: w.name || w.secid});
+        }
+        setStatus("已将本机 " + _watch.length + " 只自选股同步到账号 " + _username);
+      }
       saveWatch(); renderWatchlist(); refreshAllQuotes();
     }
   } else {
@@ -1738,7 +1722,11 @@ function renderAuthArea() {
       cloudPost("/api/logout", {});
       _token = ""; _username = "";
       try { localStorage.removeItem("sf_token"); localStorage.removeItem("sf_user"); } catch (e) {}
+      // 退出后清空自选股（账号数据不留在当前页面/本机）
+      _watch = []; _watchQuotes = {};
+      try { localStorage.removeItem("wl"); } catch (e) {}
       renderAuthArea();
+      renderWatchlist();
       setStatus("已退出登录");
     });
   } else {
