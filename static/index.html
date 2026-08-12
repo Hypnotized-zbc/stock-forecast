@@ -1707,6 +1707,26 @@ async function cloudGet(path) {
     return await r.json();
   } catch (e) { return null; }
 }
+// 页面加载时校验登录态 + 拉云端自选股（云端优先，本地 localStorage 仅兜底）
+async function loadWatchFromCloud() {
+  const me = await cloudGet("/api/me");
+  if (me && me.logged_in) {
+    renderAuthArea();
+    const d = await cloudGet("/api/watchlist");
+    if (d && Array.isArray(d.items) && d.items.length) {
+      // 云端条目无 code 字段，渲染时用 secid 派生；本地多余的保留（合并去重）
+      const seen = new Set(_watch.map(w => w.secid));
+      for (const it of d.items) {
+        if (!seen.has(it.secid)) { _watch.push({secid: it.secid, name: it.name, code: ""}); seen.add(it.secid); }
+      }
+      saveWatch(); renderWatchlist(); refreshAllQuotes();
+    }
+  } else {
+    // 未登录：打开网站即弹出登录/注册窗口
+    setTimeout(() => openAuthModal("login"), 300);
+  }
+}
+
 // 登录态 UI：未登录显示"登录/注册"，已登录显示用户名 + 退出
 function renderAuthArea() {
   const area = document.getElementById("authArea");
