@@ -1641,9 +1641,12 @@ function authHeaders() {
   if (_token) h["Authorization"] = "Bearer " + _token;
   return h;
 }
-// 401 统一处理：会话失效时清 token 并提示重新登录
+// 401 统一处理：会话失效时清 token 并回登录页（加防抖标记，避免重复跳转）
+let _authRedirecting = false;
 function handleAuthFail() {
+  if (_authRedirecting) return;
   if (_token) {
+    _authRedirecting = true;
     _token = ""; _username = "";
     try { localStorage.removeItem("sf_token"); localStorage.removeItem("sf_user"); } catch (e) {}
     // 登录失效（过期/被顶号）→ 回登录页
@@ -1666,7 +1669,7 @@ async function cloudGet(path) {
     if (r.status === 401) { handleAuthFail(); return null; }
     if (!r.ok) return null;
     return await r.json();
-  } catch (e) { return null; }
+  } catch (e) { return {__netError: true}; }  // 网络错误标记：调用方区分，避免误判为未登录
 }
 // 页面加载时校验登录态 + 拉云端自选股（云端为准，本地 localStorage 仅兜底）
 async function loadWatchFromCloud() {
@@ -1692,9 +1695,13 @@ async function loadWatchFromCloud() {
       }
       saveWatch(); renderWatchlist(); refreshAllQuotes();
     }
+  } else if (me && me.__netError) {
+    // 网络错误（非未登录）：不跳转，避免与登录页反复切换闪烁；稍后由定时器重试
+    setStatus("网络连接异常，正在重试...");
   } else {
-    // 未登录：功能页不能访问，跳回登录/注册页
-    location.href = "/";
+    // 真正未登录（401 已由 handleAuthFail 处理跳转；这里兜底）
+    if (_token) { _token = ""; _username = ""; try { localStorage.removeItem("sf_token"); localStorage.removeItem("sf_user"); } catch (e) {} }
+    if (!_authRedirecting) { _authRedirecting = true; location.href = "/"; }
   }
 }
 

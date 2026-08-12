@@ -155,14 +155,22 @@ $("authSubmit").addEventListener("click", authSubmit);
 $("authPassword").addEventListener("keydown", e => { if (e.key === "Enter") authSubmit(); });
 $("authCaptcha").addEventListener("keydown", e => { if (e.key === "Enter") authSubmit(); });
 
-// 已登录用户访问登录页 → 直接进功能页
+// 已登录用户访问登录页 → 直接进功能页。
+// 注意：token 无效（401）时清掉本地 token，否则每次打开都尝试跳转，
+// 配合功能页网络错误误判会形成登录页⇄功能页反复切换闪烁。
 (async function () {
   try {
     const t = localStorage.getItem("sf_token");
-    if (t) {
-      const r = await fetch("/api/me", {headers: {"Authorization": "Bearer " + t}});
-      if (r.ok) { location.href = "/app"; return; }
+    if (!t) return;
+    let r;
+    try {
+      r = await fetch("/api/me", {headers: {"Authorization": "Bearer " + t}});
+    } catch (e) { return; }  // 网络错误：留在登录页，不跳转也不清 token
+    if (r.status === 401) {
+      try { localStorage.removeItem("sf_token"); localStorage.removeItem("sf_user"); } catch (e) {}
+      return;
     }
+    if (r.ok) { location.href = "/app"; }
   } catch (e) {}
 })();
 </script>
