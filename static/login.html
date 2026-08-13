@@ -149,6 +149,10 @@
       <input id="authPassword" type="password" data-i18n-ph="phPass" placeholder="密码：8-20 位，含大小写字母和数字" autocomplete="current-password">
       <div class="hint" id="passwordHint"></div>
     </div>
+    <div class="field" id="pwd2Row" style="display:none">
+      <input id="authPassword2" type="password" data-i18n-ph="phPass2" placeholder="再次输入密码" autocomplete="new-password">
+      <div class="hint" id="password2Hint"></div>
+    </div>
     <div class="field" id="emailRow" style="display:none">
       <input id="authEmail" type="email" data-i18n-ph="phEmail" placeholder="密保邮箱（用于找回/修改密码）" autocomplete="email">
       <div class="hint" id="emailHint"></div>
@@ -212,14 +216,14 @@ const I18N = {
     appTitle: "股票历史数据查询", appSub: "登录后使用自选股 · AI 解读 · 数据云端同步",
     tabLogin: "登录", tabReg: "注册",
     phUser: "用户名：字母/数字/下划线，3-20 字符", phPass: "密码：8-20 位，含大小写字母和数字",
-    phCaptcha: "验证码", phEmail: "密保邮箱（用于找回/修改密码）", btnLogin: "登录", btnReg: "注册", footNote: "仅供学习研究，不构成投资建议",
+    phCaptcha: "验证码", phEmail: "密保邮箱（用于找回/修改密码）", phPass2: "再次输入密码", btnLogin: "登录", btnReg: "注册", footNote: "仅供学习研究，不构成投资建议",
     captchaTip: "看不清？点一下换一张",
     uShort: "用户名过短，至少 3 个字符", uLong: "用户名过长，最多 20 个字符",
     uChar: "用户名只能包含字母、数字、下划线", uUnder: "用户名不能只用下划线",
     pShort: "密码过短，至少 8 位", pLong: "密码过长，最多 20 位",
     pChar: "密码只能包含字母和数字", pUpper: "密码需包含大写字母",
     pLower: "密码需包含小写字母", pDigit: "密码需包含数字",
-    needCaptcha: "请输入验证码", needUserPass: "请输入用户名和密码", eFormat: "邮箱格式不正确", eLong: "邮箱过长",
+    needCaptcha: "请输入验证码", needUserPass: "请输入用户名和密码", eFormat: "邮箱格式不正确", eLong: "邮箱过长", pwd2NotMatch: "两次输入的密码不一致",
     netErr: "网络错误，请重试", okEnter: "登录成功，正在进入...", unknown: "未知错误", reqFail: "请求失败",
     slTitle: "安全验证", slTip: "拖动碎片到缺口处完成验证", slLoading: "正在加载验证...",
     slTooFast: "拖动太快或轨迹异常，请重试", slFail: "验证失败，请重试",
@@ -231,14 +235,14 @@ const I18N = {
     appTitle: "Stock History Data Query", appSub: "Watchlist · AI Insight · Cloud Sync after login",
     tabLogin: "Sign In", tabReg: "Sign Up",
     phUser: "Username: letters/digits/underscore, 3-20 chars", phPass: "Password: 8-20 chars, upper+lower+digit",
-    phCaptcha: "Captcha", phEmail: "Security email (for password reset)", btnLogin: "Sign In", btnReg: "Sign Up", footNote: "For study only, not investment advice",
+    phCaptcha: "Captcha", phEmail: "Security email (for password reset)", phPass2: "Confirm password", btnLogin: "Sign In", btnReg: "Sign Up", footNote: "For study only, not investment advice",
     captchaTip: "Click to refresh",
     uShort: "Username too short, min 3 chars", uLong: "Username too long, max 20 chars",
     uChar: "Username: letters, digits, underscore only", uUnder: "Username cannot be only underscores",
     pShort: "Password too short, min 8 chars", pLong: "Password too long, max 20 chars",
     pChar: "Password: letters and digits only", pUpper: "Password needs an uppercase letter",
     pLower: "Password needs a lowercase letter", pDigit: "Password needs a digit",
-    needCaptcha: "Please enter the captcha", needUserPass: "Please enter username and password", eFormat: "Invalid email format", eLong: "Email too long",
+    needCaptcha: "Please enter the captcha", needUserPass: "Please enter username and password", eFormat: "Invalid email format", eLong: "Email too long", pwd2NotMatch: "Passwords do not match",
     netErr: "Network error, please retry", okEnter: "Signed in, entering...", unknown: "Unknown error", reqFail: "Request failed",
     slTitle: "Security Verification", slTip: "Drag the piece to the gap", slLoading: "Loading verification...",
     slTooFast: "Dragged too fast or suspicious track, retry", slFail: "Verification failed, retry",
@@ -270,6 +274,7 @@ function setLang(lang) {
   // 清空提示文案（语言切换后旧提示不匹配）
   $("usernameHint").textContent = "";
   $("passwordHint").textContent = "";
+  $("password2Hint").textContent = "";
   $("authMsg").textContent = "";
 }
 document.querySelectorAll(".lang-item").forEach(el => {
@@ -283,15 +288,18 @@ function setTab(mode) {
   $("tabReg").classList.toggle("active", mode === "register");
   $("captchaRow").style.display = mode === "register" ? "flex" : "none";
   $("emailRow").style.display = mode === "register" ? "block" : "none";
+  $("pwd2Row").style.display = mode === "register" ? "block" : "none";
   $("authSubmit").textContent = mode === "register" ? t("btnReg") : t("btnLogin");
   $("authMsg").textContent = "";
   $("authMsg").className = "msg";
   $("authUsername").value = "";
   $("authPassword").value = "";
+  $("authPassword2").value = "";
   $("authEmail").value = "";
   $("authCaptcha").value = "";
   $("usernameHint").textContent = "";
   $("passwordHint").textContent = "";
+  $("password2Hint").textContent = "";
   $("emailHint").textContent = "";
   $("authPassword").autocomplete = mode === "register" ? "new-password" : "current-password";
   if (mode === "register") loadCaptcha();
@@ -324,13 +332,21 @@ function emailError(v) {
   if (!/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(v)) return t("eFormat");
   return "";
 }
+function password2Error() {
+  const v = $("authPassword").value;
+  const v2 = $("authPassword2").value;
+  if (!v2) return "";
+  return v === v2 ? "" : t("pwd2NotMatch");
+}
 function updateHints() {
   $("usernameHint").textContent = usernameError($("authUsername").value);
   $("passwordHint").textContent = passwordError($("authPassword").value);
+  $("password2Hint").textContent = password2Error();
   $("emailHint").textContent = emailError($("authEmail").value);
 }
 $("authUsername").addEventListener("input", updateHints);
 $("authPassword").addEventListener("input", updateHints);
+$("authPassword2").addEventListener("input", updateHints);
 $("authEmail").addEventListener("input", updateHints);
 
 async function loadCaptcha() {
@@ -442,6 +458,7 @@ async function authSubmit() {
     if (uErr) { msg.textContent = uErr; return; }
     const pErr = passwordError(password);
     if (pErr) { msg.textContent = pErr; return; }
+    if (password !== $("authPassword2").value) { msg.textContent = t("pwd2NotMatch"); return; }
     const eErr = emailError($("authEmail").value.trim().toLowerCase());
     if (eErr) { msg.textContent = eErr; return; }
     if (!captcha) { msg.textContent = t("needCaptcha"); return; }

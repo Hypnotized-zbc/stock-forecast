@@ -398,6 +398,12 @@ const I18N = {
     finalPred: "最终预测（RMSE 逆加权平均）", dailyPred: "逐日预测", queryFirst: "请先查询股票",
     fitUnavailable: "模型拟合不可用（数据不足或拟合失败）", aiQueryFirst: "请先查询股票再使用 AI 解读",
     tipDate: "日期", tipOpen: "开盘", tipHigh: "最高", tipLow: "最低", tipVol: "成交量",
+    tipClose: "收盘", closePrice: "收盘价",
+    bollUp: "BOLL上轨", bollMid: "BOLL中轨", bollLow: "BOLL下轨",
+    nowPrice: "现价", dashLine: "虚线",
+    volUp: "阳线量", volDown: "阴线量", volUnit: "单位：手",
+    chgUp: "上涨", chgDown: "下跌", chgUnit: "单位：%",
+    macdHist: "柱(2×差值)", rsiOversold: "超卖", rsiOverbought: "超买",
     tipChg: "涨跌幅", tipState: "状态", tipOverbought: "超买", tipOversold: "超卖", tipNeutral: "中性",
     tipRealClose: "真实收盘(现价)", tipFinal: "最终(加权)", unitLot: "手",
   },
@@ -454,6 +460,12 @@ const I18N = {
     finalPred: "Final Forecast (RMSE inverse-weighted)", dailyPred: "Daily Forecast", queryFirst: "Query a stock first",
     fitUnavailable: "Model fit unavailable (insufficient data or fitting failed)", aiQueryFirst: "Query a stock before using AI insight",
     tipDate: "Date", tipOpen: "Open", tipHigh: "High", tipLow: "Low", tipVol: "Volume",
+    tipClose: "Close", closePrice: "Close",
+    bollUp: "BOLL Up", bollMid: "BOLL Mid", bollLow: "BOLL Low",
+    nowPrice: "current", dashLine: "dashed",
+    volUp: "Up volume", volDown: "Down volume", volUnit: "Unit: lots",
+    chgUp: "Up", chgDown: "Down", chgUnit: "Unit: %",
+    macdHist: "Hist (2×diff)", rsiOversold: "oversold", rsiOverbought: "overbought",
     tipChg: "Change %", tipState: "State", tipOverbought: "Overbought", tipOversold: "Oversold", tipNeutral: "Neutral",
     tipRealClose: "Last Close", tipFinal: "Final (weighted)", unitLot: "lots",
   }
@@ -581,14 +593,14 @@ function drawKline() {
     const y1 = Math.min(yO,yC), h1 = Math.max(1, Math.abs(yC-yO));
     ctx.fillRect(x-bw/2, y1, bw, h1);
   }
-  legend("<span><i style='color:"+UP+"'>■</i> 涨</span>"+
-         "<span><i style='color:"+DOWN+"'>■</i> 跌</span>");
+  legend("<span><i style='color:"+UP+"'>■</i> " + t("chgUp") + "</span>"+
+         "<span><i style='color:"+DOWN+"'>■</i> " + t("chgDown") + "</span>");
 }
 
 // ---- 5日均线图 ----
 function drawMA5() {
   _indFirstIdx = firstValidIdx(["ma5"]);
-  const arrs = [["收盘", D.closes, "#6b7280", 1.0], ["MA5", D.ma5, "#3b82f6", 2.0]];
+  const arrs = [[t("tipClose"), D.closes, "#6b7280", 1.0], ["MA5", D.ma5, "#3b82f6", 2.0]];
   const [mn, mx] = seriesMinMax([...D.closes, ...D.ma5.filter(v=>v!=null)], 0.06);
   drawAxes(mn, mx, 5, _indFirstIdx);
   for (const [nm, arr, color, lw] of arrs) {
@@ -602,7 +614,7 @@ function drawMA5() {
     }
     ctx.stroke();
   }
-  legend("<span><i style='color:#6b7280'>—</i> 收盘价</span><span><i style='color:#3b82f6'>—</i> MA5</span>");
+  legend("<span><i style='color:#6b7280'>—</i> " + t("closePrice") + "</span><span><i style='color:#3b82f6'>—</i> MA5</span>");
 }
 
 // ---- BOLL 布林带 ----
@@ -623,8 +635,8 @@ function drawBOLL() {
     ctx.lineTo(indXOf(i,_indFirstIdx), yOf(D.boll_low[i],mn,mx));
   }
   ctx.closePath(); ctx.fill();
-  const lines = [["BOLL上", D.boll_up, "#e03434"], ["BOLL中", D.boll_mid, "#9ca3af"],
-                 ["BOLL下", D.boll_low, "#089981"]];
+  const lines = [[t("bollUp"), D.boll_up, "#e03434"], [t("bollMid"), D.boll_mid, "#9ca3af"],
+                 [t("bollLow"), D.boll_low, "#089981"]];
   for (const [nm, arr, color] of lines) {
     ctx.strokeStyle = color; ctx.lineWidth = 1.2; ctx.beginPath();
     let started=false;
@@ -635,7 +647,7 @@ function drawBOLL() {
     }
     ctx.stroke();
   }
-  legend("<span><i style='color:#e03434'>■</i> 上轨</span><span><i style='color:#9ca3af'>■</i> 中轨</span><span><i style='color:#089981'>■</i> 下轨</span>");
+  legend("<span><i style='color:#e03434'>■</i> " + t("bollUp") + "</span><span><i style='color:#9ca3af'>■</i> " + t("bollMid") + "</span><span><i style='color:#089981'>■</i> " + t("bollLow") + "</span>");
 }
 
 // ---- 成交量 ----
@@ -650,7 +662,7 @@ function drawVol() {
     const y = yOf(D.vols[i], mn, mx);
     ctx.fillRect(xOf(i)-bw/2, y, bw, Math.max(1, H-PAD.B-y));
   }
-  legend("<span><i style='color:"+UP+"'>■</i> 阳线量</span><span><i style='color:"+DOWN+"'>■</i> 阴线量</span><span>单位：手</span>");
+  legend("<span><i style='color:"+UP+"'>■</i> " + t("volUp") + "</span><span><i style='color:"+DOWN+"'>■</i> " + t("volDown") + "</span><span>" + t("volUnit") + "</span>");
 }
 
 // ---- 涨跌幅 ----
@@ -669,7 +681,7 @@ function drawChange() {
     const y1 = Math.min(y, y0), h1 = Math.max(1, Math.abs(y-y0));
     ctx.fillRect(xOf(i)-bw/2, y1, bw, h1);
   }
-  legend("<span><i style='color:"+UP+"'>■</i> 上涨</span><span><i style='color:"+DOWN+"'>■</i> 下跌</span><span>单位：%</span>");
+  legend("<span><i style='color:"+UP+"'>■</i> " + t("chgUp") + "</span><span><i style='color:"+DOWN+"'>■</i> " + t("chgDown") + "</span><span>" + t("chgUnit") + "</span>");
 }
 
 // 通用折线序列（key 为 D 上的数组字段，null 处断线）
@@ -746,7 +758,7 @@ function drawMACD() {
   }
   drawLineSeries("macd_dif", lo, hi, "#f59e0b", 1.4, _indFirstIdx);
   drawLineSeries("macd_dea", lo, hi, "#3b82f6", 1.4, _indFirstIdx);
-  legend("<span><i style='color:#f59e0b'>■</i> DIF</span><span><i style='color:#3b82f6'>■</i> DEA</span><span><i style='color:#e03434'>■</i> 柱(2×差值)</span>");
+  legend("<span><i style='color:#f59e0b'>■</i> DIF</span><span><i style='color:#3b82f6'>■</i> DEA</span><span><i style='color:#e03434'>■</i> " + t("macdHist") + "</span>");
 }
 
 // ---- KDJ（K/D/J）----
@@ -780,7 +792,7 @@ function drawRSI() {
   const has = D.rsi && D.rsi.some(v => v != null);
   if (!has) { drawEmpty("暂无 RSI 数据（请重新查询刷新缓存）"); return; }
   drawLineSeries("rsi", lo, hi, "#8b5cf6", 1.6, _indFirstIdx);
-  legend("<span><i style='color:#8b5cf6'>■</i> RSI(14)</span><span>30 超卖 / 70 超买</span>");
+  legend("<span><i style='color:#8b5cf6'>■</i> RSI(14)</span><span>30 " + t("rsiOversold") + " / 70 " + t("rsiOverbought") + "</span>");
 }
 
 function drawEmpty(msg) {
@@ -797,7 +809,7 @@ const FIT_ORDER = ["arima", "ets", "prophet", "svr", "rf"];
 function drawFit() {
   ctx.clearRect(0, 0, W, H);  // 先清空画布，避免残留上一张图（如 K 线）
   if (!D || !n) { paint(currentType); return; }
-  const series = [["真实收盘", D.closes, "#111827", 2.0]];
+  const series = [[t("tipRealClose"), D.closes, "#111827", 2.0]];
   let all = [...D.closes];
   if (D.fit) {
     for (const k of FIT_ORDER) {
@@ -820,7 +832,7 @@ function drawFit() {
     }
     ctx.stroke();
   }
-  let lg = "<span><i style='color:#111827'>—</i> 真实收盘</span>";
+  let lg = "<span><i style='color:#111827'>—</i> " + t("tipRealClose") + "</span>";
   if (D.fit) {
     for (const k of FIT_ORDER) {
       if (D.fit[k]) lg += "<span><i style='color:"+FIT_COLORS[k]+"'>—</i> "+D.fit[k].name+"</span>";
@@ -842,7 +854,7 @@ function renderFitPanel() {
                  ["rf", "随机森林拟合"]];
   // 图例：颜色对应上图各拟合线
   let html = "<div class='f-pred-title'>" + t("fitLegend") + "</div>";
-  html += "<div class='f-row'><span class='f-name'><span class='swatch' style='background:#111827'></span>真实收盘</span></div>";
+  html += "<div class='f-row'><span class='f-name'><span class='swatch' style='background:#111827'></span>" + t("tipRealClose") + "</span></div>";
   for (const [k, title] of order) {
     const m = D.fit[k];
     if (!m) continue;
@@ -1093,7 +1105,7 @@ function renderFuturePanel() {
   const lastClose = D.closes[D.closes.length-1];
   // 图例：色块 + 模型名（同模型拟合板块样式），颜色对应上图预测线
   let html = "<div class='f-pred-title'>" + t("fitLegend") + "</div>";
-  html += "<div class='f-row'><span class='f-name'><span style='display:inline-block;width:18px;height:0;border-top:3px dashed #111827;vertical-align:middle'></span>真实收盘（现价 "+lastClose.toFixed(2)+"，虚线）</span></div>";
+  html += "<div class='f-row'><span class='f-name'><span style='display:inline-block;width:18px;height:0;border-top:3px dashed #111827;vertical-align:middle'></span>" + t("tipRealClose") + "（" + t("nowPrice") + " "+lastClose.toFixed(2)+"，" + t("dashLine") + "）</span></div>";
   const models = [["arima", "ARIMA 预测", "#dc2626"],
                   ["ets", "ETS 指数平滑预测", "#16a34a"],
                   ["prophet", "Prophet 预测", "#f59e0b"],
@@ -1236,15 +1248,15 @@ function tipContentFor(view, i) {
   }
   return row2(t("tipDate"), "<b>"+D.dates[i]+"</b>") +
     row2(t("tipOpen"), fmt(D.opens[i])) +
-    row2("收盘", fmt(D.closes[i])) +
+    row2(t("tipClose"), fmt(D.closes[i])) +
     row2(t("tipHigh"), fmt(D.highs[i])) +
     row2(t("tipLow"), fmt(D.lows[i])) +
     row2(t("tipVol"), fmt(D.vols[i],0)+" " + t("unitLot")) +
     row2(t("tipChg"), "<span class='"+cls+"'>"+fmt(ch)+"%</span>") +
     row2("MA5", fmt(D.ma5[i])) +
-    row2("BOLL上", fmt(D.boll_up[i])) +
-    row2("BOLL中", fmt(D.boll_mid[i])) +
-    row2("BOLL下", fmt(D.boll_low[i]));
+    row2(t("bollUp"), fmt(D.boll_up[i])) +
+    row2(t("bollMid"), fmt(D.boll_mid[i])) +
+    row2(t("bollLow"), fmt(D.boll_low[i]));
 }
 
 // 固定参考线（单击设置，最多一条；再点重选）。浮窗固定在参考线旁。
