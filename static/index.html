@@ -249,7 +249,7 @@
 <div id="chgPwdOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1500;align-items:center;justify-content:center">
   <div style="background:#fff;border-radius:12px;padding:22px 24px;width:340px;max-width:92vw;box-shadow:0 14px 50px rgba(0,0,0,.3)">
     <div style="font-size:16px;font-weight:600;color:#111827;margin-bottom:14px" data-i18n="chgPwdTitle">修改密码</div>
-    <div style="margin-bottom:10px"><input id="chgOld" type="password" style="width:100%;padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px" data-i18n-ph="chgOldPh" placeholder="原密码"></div>
+    <div style="margin-bottom:10px"><input id="chgEmail" type="email" style="width:100%;padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px" data-i18n-ph="chgEmailPh" placeholder="密保邮箱"></div>
     <div style="margin-bottom:10px"><input id="chgNew" type="password" style="width:100%;padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px" data-i18n-ph="chgNewPh" placeholder="新密码（8-20 位，含大小写字母和数字）"></div>
     <div style="margin-bottom:12px"><input id="chgNew2" type="password" style="width:100%;padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px" data-i18n-ph="chgNew2Ph" placeholder="确认新密码"></div>
     <div id="chgMsg" style="color:#c0392b;font-size:12px;min-height:18px;margin-bottom:8px"></div>
@@ -298,7 +298,7 @@ const I18N = {
     guideText: "👋 使用步骤：① 上方搜索股票 → ② 候选旁点 ＋ 加入自选 → ③ 点击自选股查看 K 线与预测。实时行情每 30 秒自动刷新。",
     guideClose: "知道了",
     chgPwd: "修改密码", chgPwdTitle: "修改密码",
-    chgOldPh: "原密码", chgNewPh: "新密码（8-20 位，含大小写字母和数字）", chgNew2Ph: "确认新密码",
+    chgEmailPh: "密保邮箱", chgNewPh: "新密码（8-20 位，含大小写字母和数字）", chgNew2Ph: "确认新密码", eFormat: "邮箱格式不正确",
     chgOk: "确认修改", chgFillAll: "请填写原密码和新密码", chgNotMatch: "两次输入的新密码不一致",
     chgOkMsg: "密码已修改", netErr: "网络错误，请重试", reqFail: "请求失败",
     pShort: "密码过短，至少 8 位", pLong: "密码过长，最多 20 位", pChar: "密码只能包含字母和数字",
@@ -347,7 +347,7 @@ const I18N = {
     guideText: "👋 How to use: ① Search a stock above → ② Click ＋ to add to watchlist → ③ Click a watchlist row to view K-line and forecasts. Quotes refresh every 30s.",
     guideClose: "Got it",
     chgPwd: "Change Password", chgPwdTitle: "Change Password",
-    chgOldPh: "Current password", chgNewPh: "New password (8-20 chars, upper+lower+digit)", chgNew2Ph: "Confirm new password",
+    chgEmailPh: "Security email", chgNewPh: "New password (8-20 chars, upper+lower+digit)", chgNew2Ph: "Confirm new password", eFormat: "Invalid email format",
     chgOk: "Confirm", chgFillAll: "Enter current and new password", chgNotMatch: "New passwords do not match",
     chgOkMsg: "Password changed", netErr: "Network error, please retry", reqFail: "Request failed",
     pShort: "Password too short, min 8 chars", pLong: "Password too long, max 20 chars", pChar: "Password: letters and digits only",
@@ -1711,7 +1711,19 @@ async function prefetchWatchCharts() {
   _prefetching = false;
 }
 
-function fmtAmount(v) { if (v==null || !(v>0)) return "—"; if (v>=1e8) return (v/1e8).toFixed(2)+"亿"; if (v>=1e4) return (v/1e4).toFixed(2)+"万"; return v; }
+function fmtAmount(v) {
+  if (v==null || !(v>0)) return "—";
+  if (_lang === "en") {
+    if (v >= 1e12) return (v/1e12).toFixed(2)+"T";
+    if (v >= 1e9)  return (v/1e9).toFixed(2)+"B";
+    if (v >= 1e6)  return (v/1e6).toFixed(2)+"M";
+    if (v >= 1e3)  return (v/1e3).toFixed(2)+"K";
+    return v;
+  }
+  if (v>=1e8) return (v/1e8).toFixed(2)+"亿";
+  if (v>=1e4) return (v/1e4).toFixed(2)+"万";
+  return v;
+}
 
 async function refreshAllQuotes() {
   // 未登录：自选股属于登录用户，不请求实时行情（本地缓存可能非本人数据）
@@ -2000,24 +2012,26 @@ function passwordError(v) {
 }
 function openChgPwd() {
   document.getElementById("chgPwdOverlay").style.display = "flex";
-  document.getElementById("chgOld").value = "";
+  document.getElementById("chgEmail").value = "";
   document.getElementById("chgNew").value = "";
   document.getElementById("chgNew2").value = "";
   document.getElementById("chgMsg").textContent = "";
+  document.getElementById("chgMsg").style.color = "#c0392b";
 }
 function closeChgPwd() {
   document.getElementById("chgPwdOverlay").style.display = "none";
 }
 function submitChgPwd() {
-  const oldPw = document.getElementById("chgOld").value;
+  const email = document.getElementById("chgEmail").value.trim().toLowerCase();
   const newPw = document.getElementById("chgNew").value;
   const newPw2 = document.getElementById("chgNew2").value;
   const msg = document.getElementById("chgMsg");
-  if (!oldPw || !newPw) { msg.textContent = t("chgFillAll"); return; }
+  if (!email || !newPw) { msg.textContent = t("chgFillAll"); return; }
+  if (!/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(email)) { msg.textContent = t("eFormat"); return; }
   const pErr = passwordError(newPw);
   if (pErr) { msg.textContent = pErr; return; }
   if (newPw !== newPw2) { msg.textContent = t("chgNotMatch"); return; }
-  fetch("/api/change-password", {method: "POST", headers: authHeaders(), body: JSON.stringify({old_password: oldPw, new_password: newPw})})
+  fetch("/api/change-password", {method: "POST", headers: authHeaders(), body: JSON.stringify({email: email, new_password: newPw})})
     .then(async r => {
       const d = await r.json();
       if (!r.ok) {

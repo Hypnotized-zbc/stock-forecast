@@ -1657,6 +1657,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 username = (body.get("username") or "").strip()
                 password = body.get("password") or ""
+                email = (body.get("email") or "").strip().lower()
                 captcha_id = (body.get("captcha_id") or "").strip()
                 captcha = (body.get("captcha") or "").strip().upper()
                 # 滑块人机验证（防止机器人批量注册）：位置/时长/轨迹三重校验
@@ -1673,6 +1674,13 @@ class Handler(BaseHTTPRequestHandler):
                 # 用户名不能只用下划线（纯 _ 串无实际辨识度）
                 if re.fullmatch(r"_+", username):
                     self._send_json({"error": "用户名不能只用下划线"}, 400)
+                    return
+                # 密保邮箱：必填 + 格式校验（简单规则：含 @ 且点号在 @ 后、无空格）
+                if not re.fullmatch(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", email):
+                    self._send_json({"error": "邮箱格式不正确"}, 400)
+                    return
+                if len(email) > 100:
+                    self._send_json({"error": "邮箱过长"}, 400)
                     return
                 # 密码：仅字母/数字（无特殊字符），长度 8-20，且必须含大写+小写+数字
                 if not re.fullmatch(r"[A-Za-z0-9]{8,20}", password):
@@ -1691,10 +1699,15 @@ class Handler(BaseHTTPRequestHandler):
                 del _CAPTCHAS[captcha_id]  # 验证码一次性
                 ph, salt = hash_password(password)
                 try:
-                    uid_new = db.user_create(username, ph, salt)
+                    uid_new = db.user_create(username, ph, salt, email)
                 except sqlite3.IntegrityError:
-                    # 唯一约束冲突 → 用户名已存在
-                    self._send_json({"error": "用户名已存在，请换一个"}, 400)
+                    # 唯一约束冲突 → 用户名或邮箱已存在（分别提示）
+                    if db.user_get_by_username(username):
+                        self._send_json({"error": "用户名已存在，请换一个"}, 400)
+                    elif db.user_get_by_email(email):
+                        self._send_json({"error": "该邮箱已被使用，请换一个"}, 400)
+                    else:
+                        self._send_json({"error": "用户名或邮箱已存在"}, 400)
                     return
                 except Exception as exc:
                     # 其他错误（如库表缺失/磁盘问题）→ 500，不误导为用户名冲突
@@ -1734,11 +1747,11 @@ class Handler(BaseHTTPRequestHandler):
                     _SESSIONS.pop(auth[7:].strip(), None)
                 self._send_json({"ok": True})
             elif path == "/api/change-password":
-                # 修改密码：需登录 + 验证旧密码 + 新密码格式合法
+                # 修改密码：需登录 + 密保邮箱验证（不再要求原密码）+ 新密码格式合法
                 if uid is None:
                     _send_auth_error(self)
                     return
-                old_pw = body.get("old_password") or ""
+                email = (body.get("email") or "").strip().lower()
                 new_pw = body.get("new_password") or ""
                 if not (re.fullmatch(r"[A-Za-z0-9]{8,20}", new_pw)
                         and re.search(r"[A-Z]", new_pw)
@@ -1747,8 +1760,14 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json({"error": "新密码需 8-20 位，含大小写字母和数字"}, 400)
                     return
                 u = db.user_get_by_username(uname)
-                if not u or not verify_password(old_pw, u["password_hash"], u["salt"]):
-                    self._send_json({"error": "原密码错误"}, 400)
+                if not u:
+                    self._send_json({"error": "用户不存在"}, 400)
+                    return
+                if not u.get("email"):
+                    self._send_json({"error": "该账号未设置密保邮箱，无法修改密码"}, 400)
+                    return
+                if u["email"] != email:
+                    self._send_json({"error": "密保邮箱不正确"}, 400)
                     return
                 ph, salt = hash_password(new_pw)
                 db.user_update_password(uid, ph, salt)

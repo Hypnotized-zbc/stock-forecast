@@ -40,8 +40,15 @@ def init_db():
                 username      TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
                 salt          TEXT NOT NULL,
+                email         TEXT NOT NULL DEFAULT '',
                 created_at    TEXT NOT NULL
             )""")
+        # 老库迁移：users 表可能缺 email 列（v0.20.2 新增密保邮箱）
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
+        if "email" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''")
+            print("[db] users 表已迁移：新增 email 列")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email <> ''")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS watchlist (
                 user_id  TEXT NOT NULL DEFAULT 'default',
@@ -74,15 +81,28 @@ def init_db():
 
 # ---------------- users ----------------
 
-def user_create(username, password_hash, salt):
-    """创建用户。username 冲突时抛 sqlite3.IntegrityError。"""
+def user_create(username, password_hash, salt, email=""):
+    """创建用户。username 或 email 冲突时抛 sqlite3.IntegrityError。"""
     conn = _conn()
     try:
         conn.execute(
-            "INSERT INTO users (username, password_hash, salt, created_at) VALUES (?,?,?,?)",
-            (username, password_hash, salt, time.strftime("%Y-%m-%d %H:%M:%S")))
+            "INSERT INTO users (username, password_hash, salt, email, created_at) VALUES (?,?,?,?,?)",
+            (username, password_hash, salt, email, time.strftime("%Y-%m-%d %H:%M:%S")))
         conn.commit()
         return conn.execute("SELECT user_id FROM users WHERE username=?", (username,)).fetchone()[0]
+    finally:
+        conn.close()
+
+
+def user_get_by_email(email):
+    conn = _conn()
+    try:
+        row = conn.execute(
+            "SELECT user_id, username, password_hash, salt, email FROM users WHERE email=?",
+            (email,)).fetchone()
+        if not row:
+            return None
+        return {"user_id": row[0], "username": row[1], "password_hash": row[2], "salt": row[3], "email": row[4]}
     finally:
         conn.close()
 
@@ -91,11 +111,11 @@ def user_get_by_username(username):
     conn = _conn()
     try:
         row = conn.execute(
-            "SELECT user_id, username, password_hash, salt FROM users WHERE username=?",
+            "SELECT user_id, username, password_hash, salt, email FROM users WHERE username=?",
             (username,)).fetchone()
         if not row:
             return None
-        return {"user_id": row[0], "username": row[1], "password_hash": row[2], "salt": row[3]}
+        return {"user_id": row[0], "username": row[1], "password_hash": row[2], "salt": row[3], "email": row[4]}
     finally:
         conn.close()
 
