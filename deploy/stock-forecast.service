@@ -1,0 +1,21 @@
+[Unit]
+Description=Stock Forecast Web App (stock-forecast)
+After=network.target
+
+[Service]
+Type=simple
+# 修改为你的实际路径与用户
+WorkingDirectory=/opt/stock-forecast
+ExecStart=/usr/bin/python3 /opt/stock-forecast/app.py
+Restart=on-failure
+RestartSec=5
+Environment=STOCK_HOST=0.0.0.0
+Environment=STOCK_PORT=8000
+# 可选：HTTPS 证书（Caddy/Nginx 反代时不需要）
+# Environment=STOCK_SSL_CERT=/etc/ssl/stock/cert.pem
+# Environment=STOCK_SSL_KEY=/etc/ssl/stock/key.pem
+# 可选：访问日志
+# Environment=STOCK_LOG=1
+
+[Install]
+WantedBy=multi-user.target

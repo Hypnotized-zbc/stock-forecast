@@ -1240,9 +1240,63 @@ _pending_shutdown_ts = None  # 页面关闭标记：30 秒内无新请求才退�
 
 # ---------------- 用户认证（密码哈希 / 会话 / 图形验证码） ----------------
 # 会话与验证码存内存：服务重启后需重新登录（可接受，数据本身在 SQLite 持久化）
-_SESSIONS = {}       # token -> user_id
+_SESSIONS = {}       # token -> (user_id, expire_ts)
+_SESSION_TTL = 7 * 24 * 3600  # 会话有效期 7 天
 _CAPTCHAS = {}       # captcha_id -> (answer, expire_ts)
 _SLIDERS = {}        # slider_id -> dict(gap_x, gap_y, colors, expire_ts) 滑块拼图缺口位置
+
+# ---- 简易 IP 限速（防爆破/防刷验证码）----
+_MAX_BODY = 1_000_000  # 请求体上限 1MB
+_RATE = {}            # ip -> {kind: [timestamps], login_fail: n, lock_until: ts}
+_RATE_LIMIT = {"login": 10, "register": 5, "captcha": 20, "slider": 20, "fail": 5}
+_RATE_WINDOW = 60     # 60 秒窗口
+_RATE_LOCK = 600      # 连续失败锁定 10 分钟
+_MAX_CONCURRENCY = 50  # 并发请求上限（ThreadingHTTPServer 每请求一线程，防线程无限增长）
+_conc_sem = threading.BoundedSemaphore(_MAX_CONCURRENCY)
+
+
+def _client_ip(handler):
+    return handler.client_address[0]
+
+
+def _rate_check(ip, kind, limit=None):
+    """窗口内限速。超限返回 False；连续失败达阈值则锁定。"""
+    now = time.time()
+    r = _RATE.setdefault(ip, {})
+    if r.get("lock_until", 0) > now:
+        return False
+    lst = [t for t in r.get(kind, []) if now - t < _RATE_WINDOW]
+    r[kind] = lst
+    if len(lst) >= (limit or _RATE_LIMIT.get(kind, 20)):
+        return False
+    lst.append(now)
+    return True
+
+
+def _rate_fail(ip):
+    """登录失败计数，达阈值锁定 IP。"""
+    now = time.time()
+    r = _RATE.setdefault(ip, {})
+    r["login_fail"] = r.get("login_fail", 0) + 1
+    if r["login_fail"] >= _RATE_LIMIT["fail"]:
+        r["lock_until"] = now + _RATE_LOCK
+        r["login_fail"] = 0
+
+
+def _rate_clear(ip):
+    r = _RATE.get(ip)
+    if r:
+        r["login_fail"] = 0
+        r["lock_until"] = 0
+
+
+def _cleanup_rate():
+    """定期清理限速表，防止内存膨胀。"""
+    now = time.time()
+    for ip in [k for k, v in _RATE.items()
+               if v.get("lock_until", 0) < now - _RATE_WINDOW
+               and all(not v.get(kind) for kind in ("login", "register", "captcha", "slider"))]:
+        del _RATE[ip]
 
 # 滑块拼图：7x4 网格色块背景 + 缺口碎片（零依赖 SVG）
 _SLIDER_W, _SLIDER_H, _SLIDER_CELL = 280, 160, 40  # 7x4 网格，每格 40x40
@@ -1326,15 +1380,19 @@ def verify_password(password, password_hash, salt):
 
 
 def _auth_user(headers):
-    """从 Authorization: Bearer <token> 解析用户。返回 (user_id, username) 或 (None, None)。"""
+    """从 Authorization: Bearer *** 解析用户。返回 (user_id, username) 或 (None, None)。"""
     auth = headers.get("Authorization", "")
     if auth.startswith("Bearer "):
         token = auth[7:].strip()
-        uid = _SESSIONS.get(token)
-        if uid is not None:
-            u = db.user_get(uid)
-            if u:
-                return uid, u["username"]
+        item = _SESSIONS.get(token)
+        if item:
+            uid, exp = item
+            if exp >= time.time():
+                u = db.user_get(uid)
+                if u:
+                    return uid, u["username"]
+            else:
+                _SESSIONS.pop(token, None)  # 过期会话清理
     return None, None
 
 
@@ -1380,14 +1438,23 @@ def _cancel_pending_shutdown():
 class Handler(BaseHTTPRequestHandler):
     """查询页 + JSON API。浏览器与后端同源，后端中转东财/新浪。"""
 
-    def log_message(self, fmt, *args):  # 静默访问日志
-        pass
+    def log_message(self, fmt, *args):  # 默认静默；STOCK_LOG=1 时打印访问日志
+        if os.environ.get("STOCK_LOG"):
+            super().log_message(fmt, *args)
 
     def _send(self, code, content_type, body):
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        # 安全响应头：CSP 防 XSS 注入、X-Frame-Options 防点击劫持、nosniff 防 MIME 嗅探
+        self.send_header("Content-Security-Policy",
+                         "default-src 'self'; img-src 'self' data:; "
+                         "style-src 'self' 'unsafe-inline'; "
+                         "script-src 'self' 'unsafe-inline'; connect-src 'self'")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "SAMEORIGIN")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
         try:
             self.wfile.write(body)
@@ -1402,6 +1469,15 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, "text/html; charset=utf-8", text.encode("utf-8"))
 
     def do_GET(self):
+        if not _conc_sem.acquire(blocking=False):
+            self._send_json({"error": "服务器繁忙，请稍后再试"}, 503)
+            return
+        try:
+            self._do_GET()
+        finally:
+            _conc_sem.release()
+
+    def _do_GET(self):
         _cancel_pending_shutdown()  # 任何请求都说明页面仍在用，取消待执行退出
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
@@ -1508,9 +1584,15 @@ class Handler(BaseHTTPRequestHandler):
                 limit = int((params.get("limit") or ["50"])[0])
                 self._send_json({"items": db.history_get(uid, limit=limit)})
             elif path == "/api/captcha":
+                if not _rate_check(_client_ip(self), "captcha"):
+                    self._send_json({"error": "操作过于频繁，请稍后再试"}, 429)
+                    return
                 cid, svg = _gen_captcha()
                 self._send_json({"captcha_id": cid, "svg": svg})
             elif path == "/api/slider":
+                if not _rate_check(_client_ip(self), "slider"):
+                    self._send_json({"error": "操作过于频繁，请稍后再试"}, 429)
+                    return
                 sid, bg, piece = _gen_slider()
                 item = _SLIDERS.get(sid)
                 self._send_json({"slider_id": sid, "bg": bg, "piece": piece,
@@ -1535,6 +1617,15 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": f"服务器错误: {exc}"}, 500)
 
     def do_POST(self):
+        if not _conc_sem.acquire(blocking=False):
+            self._send_json({"error": "服务器繁忙，请稍后再试"}, 503)
+            return
+        try:
+            self._do_POST()
+        finally:
+            _conc_sem.release()
+
+    def _do_POST(self):
         """用户数据写接口：自选股增删 / AI 缓存保存 / 查询历史记录。"""
         _cancel_pending_shutdown()
         path = urllib.parse.urlparse(self.path).path
@@ -1550,13 +1641,20 @@ class Handler(BaseHTTPRequestHandler):
             if length <= 0:
                 self._send_json({"error": "缺少请求体"}, 400)
                 return
+            if length > _MAX_BODY:
+                self._send_json({"error": "请求体过大"}, 413)
+                return
             body = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
         except (ValueError, TypeError):
             self._send_json({"error": "请求体不是合法 JSON"}, 400)
             return
+        _cleanup_rate()
         uid, uname = _auth_user(self.headers)
         try:
             if path == "/api/register":
+                if not _rate_check(_client_ip(self), "register"):
+                    self._send_json({"error": "操作过于频繁，请稍后再试"}, 429)
+                    return
                 username = (body.get("username") or "").strip()
                 password = body.get("password") or ""
                 captcha_id = (body.get("captcha_id") or "").strip()
@@ -1605,9 +1703,13 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 # 注册即登录
                 token = secrets.token_hex(24)
-                _SESSIONS[token] = uid_new
+                _SESSIONS[token] = (uid_new, time.time() + _SESSION_TTL)
                 self._send_json({"ok": True, "token": token, "user_id": uid_new, "username": username})
             elif path == "/api/login":
+                ip = _client_ip(self)
+                if not _rate_check(ip, "login"):
+                    self._send_json({"error": "尝试过于频繁，请稍后再试"}, 429)
+                    return
                 username = (body.get("username") or "").strip()
                 password = body.get("password") or ""
                 # 滑块人机验证（防止机器人批量撞库）
@@ -1619,16 +1721,45 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 u = db.user_get_by_username(username)
                 if not u or not verify_password(password, u["password_hash"], u["salt"]):
+                    _rate_fail(ip)  # 失败计数，达阈值锁定
                     self._send_json({"error": "用户名或密码错误"}, 401)
                     return
+                _rate_clear(ip)
                 token = secrets.token_hex(24)
-                _SESSIONS[token] = u["user_id"]
+                _SESSIONS[token] = (u["user_id"], time.time() + _SESSION_TTL)
                 self._send_json({"ok": True, "token": token, "user_id": u["user_id"], "username": u["username"]})
             elif path == "/api/logout":
                 auth = self.headers.get("Authorization", "")
                 if auth.startswith("Bearer "):
                     _SESSIONS.pop(auth[7:].strip(), None)
                 self._send_json({"ok": True})
+            elif path == "/api/change-password":
+                # 修改密码：需登录 + 验证旧密码 + 新密码格式合法
+                if uid is None:
+                    _send_auth_error(self)
+                    return
+                old_pw = body.get("old_password") or ""
+                new_pw = body.get("new_password") or ""
+                if not (re.fullmatch(r"[A-Za-z0-9]{8,20}", new_pw)
+                        and re.search(r"[A-Z]", new_pw)
+                        and re.search(r"[a-z]", new_pw)
+                        and re.search(r"[0-9]", new_pw)):
+                    self._send_json({"error": "新密码需 8-20 位，含大小写字母和数字"}, 400)
+                    return
+                u = db.user_get_by_username(uname)
+                if not u or not verify_password(old_pw, u["password_hash"], u["salt"]):
+                    self._send_json({"error": "原密码错误"}, 400)
+                    return
+                ph, salt = hash_password(new_pw)
+                db.user_update_password(uid, ph, salt)
+                # 改密后使该用户所有旧会话失效（除当前）
+                cur_token = ""
+                auth = self.headers.get("Authorization", "")
+                if auth.startswith("Bearer "):
+                    cur_token = auth[7:].strip()
+                for tk in [tk for tk, (uid2, _) in _SESSIONS.items() if uid2 == uid and tk != cur_token]:
+                    _SESSIONS.pop(tk, None)
+                self._send_json({"ok": True, "message": "密码已修改"})
             elif path == "/api/watchlist":
                 if uid is None:
                     _send_auth_error(self)
@@ -1726,6 +1857,16 @@ def main():
     port = int(os.environ.get("STOCK_PORT", "0"))
     server = ThreadingHTTPServer((host, port), Handler)
     server.daemon_threads = True  # 请求线程守护化，客户端断开不拖垮进程
+    # HTTPS：配置 STOCK_SSL_CERT / STOCK_SSL_KEY（证书 + 私钥路径）后自动启用 TLS。
+    # 生产环境更推荐用 Caddy/Nginx 反向代理终结 TLS（自动证书续期更省心）。
+    cert = os.environ.get("STOCK_SSL_CERT")
+    key = os.environ.get("STOCK_SSL_KEY")
+    if cert and key:
+        import ssl
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(cert, key)
+        server.socket = ctx.wrap_socket(server.socket, server_side=True)
+        print("[i] HTTPS 已启用（STOCK_SSL_CERT/STOCK_SSL_KEY）")
     port = server.server_address[1]
     url = f"http://127.0.0.1:{port}/"
     print(f"[i] 服务已启动: {url} (监听 {host}:{port})")

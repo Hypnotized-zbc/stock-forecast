@@ -155,6 +155,11 @@
       <div id="authArea" style="font-size:13px"><span style="color:#9ca3af" data-i18n="pleaseLogin">请登录</span></div>
     </div>
   </div>
+  <!-- 新用户引导条（登录后首次显示，可关闭） -->
+  <div id="guideBar" style="display:none;background:#eef2ff;border:1px solid #c7d2fe;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:13px;color:#3730a3">
+    <span data-i18n="guideText">👋 使用步骤：① 上方搜索股票 → ② 候选旁点 ＋ 加入自选 → ③ 点击自选股查看 K 线与预测。实时行情每 30 秒自动刷新。</span>
+    <button id="guideClose" style="margin-left:10px;padding:2px 10px;border:1px solid #c7d2fe;border-radius:6px;background:#fff;cursor:pointer;font-size:12px" data-i18n="guideClose">知道了</button>
+  </div>
   <div class="query-row">
     <label for="stockInput" data-i18n="queryLabel">查询股票：</label>
     <input type="text" id="stockInput" data-i18n-ph="phStock" placeholder="名称或代码，如：601088 / 中国神华 / 600519" autofocus>
@@ -240,6 +245,20 @@
   </div>
 </div>
 <div id="authModal" style="display:none"></div>
+<!-- 修改密码弹窗 -->
+<div id="chgPwdOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1500;align-items:center;justify-content:center">
+  <div style="background:#fff;border-radius:12px;padding:22px 24px;width:340px;max-width:92vw;box-shadow:0 14px 50px rgba(0,0,0,.3)">
+    <div style="font-size:16px;font-weight:600;color:#111827;margin-bottom:14px" data-i18n="chgPwdTitle">修改密码</div>
+    <div style="margin-bottom:10px"><input id="chgOld" type="password" style="width:100%;padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px" data-i18n-ph="chgOldPh" placeholder="原密码"></div>
+    <div style="margin-bottom:10px"><input id="chgNew" type="password" style="width:100%;padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px" data-i18n-ph="chgNewPh" placeholder="新密码（8-20 位，含大小写字母和数字）"></div>
+    <div style="margin-bottom:12px"><input id="chgNew2" type="password" style="width:100%;padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px" data-i18n-ph="chgNew2Ph" placeholder="确认新密码"></div>
+    <div id="chgMsg" style="color:#c0392b;font-size:12px;min-height:18px;margin-bottom:8px"></div>
+    <div style="text-align:right">
+      <button id="chgCancel" style="padding:7px 14px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;font-size:13px" data-i18n="cmpClose">关闭</button>
+      <button id="chgOk" style="padding:7px 16px;border:none;border-radius:6px;background:#2563eb;color:#fff;cursor:pointer;font-size:13px;margin-left:8px" data-i18n="chgOk">确认修改</button>
+    </div>
+  </div>
+</div>
 <script>
 "use strict";
 // ---- 语言切换（中/英）----
@@ -276,6 +295,14 @@ const I18N = {
     stShareShot: "图表截图失败: ", stShareExport: "导出失败: ", stShareRead: "图表图片读取失败",
     stZoomHint: "放大模式：滚轮缩放横轴，左键拖拽平移，单击锁定参考线，右上角 ✕ 关闭",
     stLogout: "退出",
+    guideText: "👋 使用步骤：① 上方搜索股票 → ② 候选旁点 ＋ 加入自选 → ③ 点击自选股查看 K 线与预测。实时行情每 30 秒自动刷新。",
+    guideClose: "知道了",
+    chgPwd: "修改密码", chgPwdTitle: "修改密码",
+    chgOldPh: "原密码", chgNewPh: "新密码（8-20 位，含大小写字母和数字）", chgNew2Ph: "确认新密码",
+    chgOk: "确认修改", chgFillAll: "请填写原密码和新密码", chgNotMatch: "两次输入的新密码不一致",
+    chgOkMsg: "密码已修改", netErr: "网络错误，请重试", reqFail: "请求失败",
+    pShort: "密码过短，至少 8 位", pLong: "密码过长，最多 20 位", pChar: "密码只能包含字母和数字",
+    pUpper: "密码需包含大写字母", pLower: "密码需包含小写字母", pDigit: "密码需包含数字",
     aiTitle: "AI 技术解读", aiRegen: "重新生成", aiRegenTip: "重新生成解读（覆盖缓存）", aiCloseTip: "关闭解读窗口",
     aiWaiting: "正在进行AI技术解读，大约需要5-10s…", aiEmpty: "解读结果为空，请点击 🔄 重新生成",
     todayPrefix: "今日 ", predRange: "预测区间", fitLegend: "图例（颜色对应上图拟合线）",
@@ -317,6 +344,14 @@ const I18N = {
     stShareShot: "Snapshot failed: ", stShareExport: "Export failed: ", stShareRead: "Chart image read failed",
     stZoomHint: "Zoom: wheel to scale X, drag to pan, double-click to pin, ✕ to close",
     stLogout: "Sign out",
+    guideText: "👋 How to use: ① Search a stock above → ② Click ＋ to add to watchlist → ③ Click a watchlist row to view K-line and forecasts. Quotes refresh every 30s.",
+    guideClose: "Got it",
+    chgPwd: "Change Password", chgPwdTitle: "Change Password",
+    chgOldPh: "Current password", chgNewPh: "New password (8-20 chars, upper+lower+digit)", chgNew2Ph: "Confirm new password",
+    chgOk: "Confirm", chgFillAll: "Enter current and new password", chgNotMatch: "New passwords do not match",
+    chgOkMsg: "Password changed", netErr: "Network error, please retry", reqFail: "Request failed",
+    pShort: "Password too short, min 8 chars", pLong: "Password too long, max 20 chars", pChar: "Password: letters and digits only",
+    pUpper: "Password needs an uppercase letter", pLower: "Password needs a lowercase letter", pDigit: "Password needs a digit",
     aiTitle: "AI Technical Insight", aiRegen: "Regenerate", aiRegenTip: "Regenerate insight (overwrite cache)", aiCloseTip: "Close insight panel",
     aiWaiting: "AI insight in progress, about 5-10s…", aiEmpty: "Empty result, click 🔄 Regenerate",
     todayPrefix: "Today ", predRange: "forecast range", fitLegend: "Legend (colors match lines above)",
@@ -330,6 +365,12 @@ const I18N = {
 let _lang = "zh";
 try { _lang = localStorage.getItem("sf_lang") || "zh"; } catch (e) { _lang = "zh"; }
 function t(key) { return (I18N[_lang] && I18N[_lang][key]) || key; }
+// XSS 转义：所有来自外部（API/LLM/用户输入）的文本拼进 innerHTML 前必须经过 esc()
+function esc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
 function applyLang() {
   document.querySelectorAll("[data-i18n]").forEach(el => {
     el.textContent = t(el.dataset.i18n);
@@ -1571,7 +1612,7 @@ async function doSearch() {
     if (data.error) { setStatus(t("stSearchFail") + data.error); return; }
     if (!data.length) { setStatus(t("stNotFound")); return; }
     box.innerHTML = data.map((c, i) =>
-      "<button class='cand' data-i='" + i + "'>" + c["名称"] + " " + c["代码"] + " " + c["市场"] + "</button>" +
+      "<button class='cand' data-i='" + i + "'>" + esc(c["名称"]) + " " + esc(c["代码"]) + " " + esc(c["市场"]) + "</button>" +
       "<button class='wl-add' data-i='" + i + "' title='加入自选'>＋</button>"
     ).join("");
     window._cands = data;
@@ -1717,7 +1758,7 @@ function setChartData(data, name, secid) {
   // 永远显示 —，用户多次反馈"显示不出来"，删除不再显示）
   const code = String(secid || "").split(".")[1] || "";
   document.getElementById("curStock").innerHTML =
-    (_curName || "—") + "<span class='code'>" + code + "</span>";
+    esc(_curName || "—") + "<span class='code'>" + esc(code) + "</span>";
   document.getElementById("rangeInfo").textContent =
     (_curName || name || "") + " | " + D.dates[0] + " ~ " + D.dates[n-1] + " | 共 " + n + " 个交易日";
   // 注意：不清空 candidateBox——候选选项在加入自选股/重新搜索前保持显示，避免闪烁消失
@@ -1775,7 +1816,7 @@ function renderWatchlist() {
       "<span class='wl-x'></span>" +
     "</div>" + _watch.map(w =>
     "<div class='wl-row' data-secid='"+w.secid+"'>" +
-      "<span class='wl-name'>"+w.name+" <b>"+(w.code || (w.secid||"").split(".")[1] || "")+"</b></span>" +
+      "<span class='wl-name'>"+esc(w.name)+" <b>"+esc(w.code || (w.secid||"").split(".")[1] || "")+"</b></span>" +
       "<span class='wl-price' style='color:#999'>" + t("wlLoading") + "</span>" +
       "<span class='wl-chg'></span>" +
       "<span class='wl-prev'></span>" +
@@ -1898,6 +1939,16 @@ async function loadWatchFromCloud() {
       saveWatch(); renderWatchlist(); refreshAllQuotes();
       // 登录后自动按序预取自选股图表数据（串行防卡顿，状态显示在行右侧）
       prefetchWatchCharts();
+      // 新用户引导：登录后首次显示引导条（localStorage 标记，可关闭）
+      try {
+        if (!localStorage.getItem("sf_guide_seen")) {
+          document.getElementById("guideBar").style.display = "block";
+          document.getElementById("guideClose").addEventListener("click", () => {
+            document.getElementById("guideBar").style.display = "none";
+            try { localStorage.setItem("sf_guide_seen", "1"); } catch (e) {}
+          });
+        }
+      } catch (e) {}
     }
   } else if (me && me.__netError) {
     // 网络错误（非未登录）：不跳转，避免与登录页反复切换闪烁；稍后由定时器重试
@@ -1914,8 +1965,10 @@ async function loadWatchFromCloud() {
 function renderAuthArea() {
   const area = document.getElementById("authArea");
   if (_username) {
-    area.innerHTML = "<span style='color:#4b5563'>👤 " + _username + "</span> " +
+    area.innerHTML = "<span style='color:#4b5563'>👤 " + esc(_username) + "</span> " +
+      "<button id='chgPwdBtn' style='padding:3px 10px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;margin-left:6px'>" + t("chgPwd") + "</button>" +
       "<button id='logoutBtn' style='padding:3px 10px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;margin-left:6px'>" + t("stLogout") + "</button>";
+    document.getElementById("chgPwdBtn").addEventListener("click", openChgPwd);
     document.getElementById("logoutBtn").addEventListener("click", () => {
       cloudPost("/api/logout", {});
       _token = ""; _username = "";
@@ -1933,6 +1986,53 @@ function renderAuthArea() {
     area.innerHTML = "<span style='color:#9ca3af'>" + t("pleaseLogin") + "</span>";
   }
 }
+
+// ---- 修改密码 ----
+function passwordError(v) {
+  if (!v) return "";
+  if (v.length < 8) return t("pShort");
+  if (v.length > 20) return t("pLong");
+  if (!/^[A-Za-z0-9]+$/.test(v)) return t("pChar");
+  if (!/[A-Z]/.test(v)) return t("pUpper");
+  if (!/[a-z]/.test(v)) return t("pLower");
+  if (!/[0-9]/.test(v)) return t("pDigit");
+  return "";
+}
+function openChgPwd() {
+  document.getElementById("chgPwdOverlay").style.display = "flex";
+  document.getElementById("chgOld").value = "";
+  document.getElementById("chgNew").value = "";
+  document.getElementById("chgNew2").value = "";
+  document.getElementById("chgMsg").textContent = "";
+}
+function closeChgPwd() {
+  document.getElementById("chgPwdOverlay").style.display = "none";
+}
+function submitChgPwd() {
+  const oldPw = document.getElementById("chgOld").value;
+  const newPw = document.getElementById("chgNew").value;
+  const newPw2 = document.getElementById("chgNew2").value;
+  const msg = document.getElementById("chgMsg");
+  if (!oldPw || !newPw) { msg.textContent = t("chgFillAll"); return; }
+  const pErr = passwordError(newPw);
+  if (pErr) { msg.textContent = pErr; return; }
+  if (newPw !== newPw2) { msg.textContent = t("chgNotMatch"); return; }
+  fetch("/api/change-password", {method: "POST", headers: authHeaders(), body: JSON.stringify({old_password: oldPw, new_password: newPw})})
+    .then(async r => {
+      const d = await r.json();
+      if (!r.ok) {
+        if (r.status === 401) { handleAuthFail(); return; }
+        msg.textContent = d.error || t("reqFail");
+        return;
+      }
+      msg.style.color = "#16a34a";
+      msg.textContent = t("chgOkMsg");
+      setTimeout(closeChgPwd, 1200);
+    })
+    .catch(() => { msg.textContent = t("netErr"); });
+}
+document.getElementById("chgCancel").addEventListener("click", closeChgPwd);
+document.getElementById("chgOk").addEventListener("click", submitChgPwd);
 
 // ---- K线缓存：已下载过的股票（含自选股）当日不再重复下载 ----
 function cacheKey(secid, period) {
@@ -2190,7 +2290,7 @@ async function requestAiInsight(force) {
   const ck = aiCacheKey();
   const myToken = ++_aiReqToken;
   if (!force && aiCacheValid(_aiCache[ck])) {
-    panel.innerHTML = aiTitleHtml() + _aiCache[ck].text;
+    panel.innerHTML = aiTitleHtml() + esc(_aiCache[ck].text).replace(/\n/g, "<br>");
     return;
   }
   // 本地无有效缓存时查云端（服务器 SQLite），命中且是当天生成则写入本地并显示；
@@ -2202,7 +2302,7 @@ async function requestAiInsight(force) {
     if (cloud && cloud.hit && cloud.text && (cloud.ts || "").slice(0, 10) === todayStr()) {
       _aiCache[ck] = {text: cloud.text, ts: cloud.ts};
       saveAiCache();
-      panel.innerHTML = aiTitleHtml() + cloud.text.replace(/\n/g, "<br>");
+      panel.innerHTML = aiTitleHtml() + esc(cloud.text).replace(/\n/g, "<br>");
       return;
     }
   }
@@ -2233,7 +2333,7 @@ async function requestAiInsight(force) {
       // 同步到云端（服务器 SQLite，INSERT OR REPLACE 覆盖同一条），换设备也能读到
       const period = (ck.split("_")[1]) || "day";
       cloudPost("/api/ai-cache", {secid: secid, period: period, text: t});
-      panel.innerHTML = aiTitleHtml() + t.replace(/\n/g, "<br>");
+      panel.innerHTML = aiTitleHtml() + esc(t).replace(/\n/g, "<br>");
     }
   } catch (e) {
     if (myToken !== _aiReqToken) return;
@@ -2584,7 +2684,7 @@ document.getElementById("cmpBtn").addEventListener("click", () => {
   const box = document.getElementById("cmpList");
   box.innerHTML = list.map((c, i) =>
     "<label class='cmp-item'><input type='checkbox' value='" + c.secid + "' " + (i < 2 ? "checked" : "") + ">" +
-    c.name + " <span style='color:#999'>" + c.secid + "</span></label>"
+    esc(c.name) + " <span style='color:#999'>" + esc(c.secid) + "</span></label>"
   ).join("");
   document.getElementById("compareOverlay").style.display = "flex";
   document.getElementById("compareCanvas").style.display = "none";

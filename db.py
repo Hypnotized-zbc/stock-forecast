@@ -113,6 +113,18 @@ def user_get(user_id):
         conn.close()
 
 
+def user_update_password(user_id, password_hash, salt):
+    """更新用户密码哈希与盐。"""
+    conn = _conn()
+    try:
+        conn.execute(
+            "UPDATE users SET password_hash=?, salt=? WHERE user_id=?",
+            (password_hash, salt, user_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 # ---------------- watchlist ----------------
 
 def watchlist_get(user_id=DEFAULT_USER):

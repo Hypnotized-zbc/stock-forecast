@@ -19,6 +19,8 @@ FILES=(
   crawler/__init__.py
   examples/demo.py
   tools/upload_github.py
+  tools/backup_db.sh
+  deploy/stock-forecast.service
   tests/test_backend.py
   requirements.txt
   README.md

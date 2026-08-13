@@ -1,5 +1,30 @@
 # 更新报告
 
+## v0.20.0 (2026-08-13)
+- 安全加固（公开部署前必备）：
+  - 会话 token 7 天过期 + 过期自动清理（原永久有效，泄露即长期可用）
+  - IP 限速：登录 10 次/分、注册 5 次/分、验证码/滑块 20 次/分；
+    连续 5 次登录失败锁定该 IP 10 分钟（防爆破/防刷验证码）
+  - 请求体上限 1MB（超出 413）；并发请求上限 50（超出 503，防线程无限增长）
+  - 安全响应头：CSP / X-Frame-Options SAMEORIGIN / X-Content-Type-Options nosniff /
+    Referrer-Policy no-referrer（防 XSS/点击劫持/MIME 嗅探）
+  - XSS 转义：前端新增 esc() 函数，所有外部文本（API 返回/AI 解读/用户输入）拼入
+    innerHTML 前转义（候选列表/自选股行/当前股标题/用户名/AI 解读/对比列表）
+  - HTTPS 支持：STOCK_SSL_CERT / STOCK_SSL_KEY 环境变量直接启用 TLS；
+    README 补充 Caddy 反代方案（自动证书更省心）
+- 功能：修改密码（功能页右上角"修改密码"按钮 + 弹窗；旧密码验证 + 新密码格式校验 +
+  改密后该用户其他会话全部失效，当前会话保留）
+- 运维：
+  - deploy/stock-forecast.service systemd 常驻单元（含 STOCK_HOST/PORT/SSL/日志注释）
+  - tools/backup_db.sh 数据库备份脚本（sqlite3 在线备份，保留最近 30 份，可配 crontab）
+  - 访问日志开关：STOCK_LOG=1 时打印请求日志（默认静默）
+  - requirements.txt 精简为 requests（移除未用的 pandas/bs4/lxml）
+- 体验：新用户引导条（登录后首次显示使用步骤：搜索→加自选→看K线，可关闭，localStorage 记忆）
+- 文档：README 全面修正（删除已废弃的热力图描述、三表→四表、目录结构补 deploy/tools、
+  API 表补 /api/slider 与 /api/change-password、新增安全说明与 HTTPS/备份部署章节）
+- 验证：ad-hoc 端到端 35 项全过（会话过期清理、IP 限速、413/安全头、
+  改密全链路（旧密码错/格式错/成功/旧会话踢出/新密码登录）、esc 转义、静态断言新文件存在）
+
 ## v0.19.1 (2026-08-13)
 - 登录/注册滑块人机验证（用户要求：单独的窗口，弹出时周围变暗，防止机器人大量入侵）：
   - 点击登录/注册 → 先做格式校验 → 弹出滑块验证弹窗（半透明遮罩变暗 + 居中白卡）
