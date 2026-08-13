@@ -81,6 +81,49 @@
   .submit:hover { background: #1d4ed8; }
   .submit:disabled { background: #93c5fd; cursor: not-allowed; }
   .foot { text-align: center; margin-top: 16px; font-size: 12px; color: #9ca3af; }
+  /* ---- 滑块人机验证弹窗 ---- */
+  #sliderOverlay {
+    display: none; position: fixed; inset: 0; z-index: 2000;
+    background: rgba(0,0,0,.55); align-items: center; justify-content: center;
+  }
+  #sliderOverlay.show { display: flex; }
+  .slider-box {
+    width: 360px; max-width: 92vw; background: #fff; border-radius: 14px;
+    box-shadow: 0 16px 60px rgba(0,0,0,.35); padding: 20px 22px 18px;
+    text-align: center;
+  }
+  .slider-box h3 { margin: 0 0 4px; font-size: 16px; color: #111827; }
+  .slider-tip { font-size: 12px; color: #9ca3af; margin-bottom: 12px; }
+  .slider-track {
+    position: relative; width: 280px; height: 160px; margin: 0 auto;
+    border-radius: 8px; overflow: hidden; background: #e5e7eb;
+  }
+  .slider-track img.bg { width: 100%; height: 100%; display: block; }
+  .slider-piece {
+    position: absolute; top: 0; left: 0; width: 40px; height: 40px;
+    cursor: grab; user-select: none; z-index: 2;
+    border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,.35);
+  }
+  .slider-piece.dragging { cursor: grabbing; }
+  .slider-bar {
+    position: relative; width: 280px; height: 40px; margin: 12px auto 0;
+    background: #f1f5f9; border: 1px solid #d1d5db; border-radius: 20px;
+  }
+  .slider-bar .fill {
+    position: absolute; left: 0; top: 0; bottom: 0; width: 0;
+    background: #2563eb; opacity: .18; border-radius: 20px; transition: width .08s;
+  }
+  .slider-btn {
+    position: absolute; left: 2px; top: 2px; width: 36px; height: 36px;
+    background: #fff; border: 1px solid #cbd5e1; border-radius: 50%;
+    cursor: grab; z-index: 3; display: flex; align-items: center; justify-content: center;
+    font-size: 15px; color: #2563eb; box-shadow: 0 2px 6px rgba(0,0,0,.2);
+    transition: box-shadow .15s;
+  }
+  .slider-btn.dragging { cursor: grabbing; box-shadow: 0 4px 12px rgba(0,0,0,.3); }
+  .slider-msg { font-size: 12px; min-height: 18px; margin-top: 8px; color: #c0392b; }
+  .slider-msg.ok { color: #16a34a; }
+  .slider-msg.ing { color: #2563eb; }
 </style>
 </head>
 <body>
@@ -115,6 +158,22 @@
   </div>
   <div class="foot" data-i18n="footNote">仅供学习研究，不构成投资建议</div>
 </div>
+<!-- 滑块人机验证弹窗：防止机器人批量登录/注册 -->
+<div id="sliderOverlay">
+  <div class="slider-box">
+    <h3 data-i18n="slTitle">安全验证</h3>
+    <div class="slider-tip" data-i18n="slTip">拖动碎片到缺口处完成验证</div>
+    <div class="slider-track" id="sliderTrack">
+      <img class="bg" id="sliderBg" alt="">
+      <div class="slider-piece" id="sliderPiece"><img src="" alt="" style="width:40px;height:40px;display:block;border-radius:6px"></div>
+    </div>
+    <div class="slider-bar">
+      <div class="fill" id="sliderFill"></div>
+      <div class="slider-btn" id="sliderBtn">→</div>
+    </div>
+    <div class="slider-msg" id="sliderMsg"></div>
+  </div>
+</div>
 <script>
 let _authMode = "login";
 let _captchaId = "";
@@ -135,6 +194,9 @@ const I18N = {
     pLower: "密码需包含小写字母", pDigit: "密码需包含数字",
     needCaptcha: "请输入验证码", needUserPass: "请输入用户名和密码",
     netErr: "网络错误，请重试", okEnter: "登录成功，正在进入...", unknown: "未知错误", reqFail: "请求失败",
+    slTitle: "安全验证", slTip: "拖动碎片到缺口处完成验证", slLoading: "正在加载验证...",
+    slTooFast: "拖动太快或轨迹异常，请重试", slFail: "验证失败，请重试",
+    slDone: "验证通过", slDrag: "按住滑块向右拖动",
   },
   en: {
     appTitle: "Stock History Data Query", appSub: "Watchlist · AI Insight · Cloud Sync after login",
@@ -149,6 +211,9 @@ const I18N = {
     pLower: "Password needs a lowercase letter", pDigit: "Password needs a digit",
     needCaptcha: "Please enter the captcha", needUserPass: "Please enter username and password",
     netErr: "Network error, please retry", okEnter: "Signed in, entering...", unknown: "Unknown error", reqFail: "Request failed",
+    slTitle: "Security Verification", slTip: "Drag the piece to the gap", slLoading: "Loading verification...",
+    slTooFast: "Dragged too fast or suspicious track, retry", slFail: "Verification failed, retry",
+    slDone: "Verified", slDrag: "Hold and drag right",
   }
 };
 let _lang = "zh";
@@ -182,6 +247,7 @@ document.querySelectorAll(".lang-item").forEach(el => {
 
 function setTab(mode) {
   _authMode = mode;
+  closeSlider();  // 切换登录/注册 tab 时关闭滑块弹窗
   $("tabLogin").classList.toggle("active", mode === "login");
   $("tabReg").classList.toggle("active", mode === "register");
   $("captchaRow").style.display = mode === "register" ? "flex" : "none";
@@ -234,7 +300,114 @@ async function loadCaptcha() {
 }
 $("captchaImg").addEventListener("click", loadCaptcha);
 
+// ---- 滑块人机验证 ----
+let _sliderData = null;  // 当前滑块 {id, trackW, cell, gapY}
+let _sliderDrag = null;  // 拖动状态 {startX, btnStart, pieceStart, t0, samples}
+
+function openSlider() {
+  const ov = document.getElementById("sliderOverlay");
+  ov.classList.add("show");
+  const msg = document.getElementById("sliderMsg");
+  msg.textContent = t("slLoading"); msg.className = "slider-msg";
+  loadSlider();
+}
+function closeSlider() {
+  document.getElementById("sliderOverlay").classList.remove("show");
+}
+function loadSlider() {
+  const msg = document.getElementById("sliderMsg");
+  msg.textContent = t("slLoading"); msg.className = "slider-msg";
+  fetch("/api/slider").then(r => r.json()).then(d => {
+    _sliderData = {id: d.slider_id, trackW: d.track_w, cell: d.cell, gapY: d.gap_y};
+    document.getElementById("sliderBg").src = d.bg;
+    document.getElementById("sliderPiece").querySelector("img").src = d.piece;
+    // 碎片纵向定位到缺口行，横向初始 0
+    const piece = document.getElementById("sliderPiece");
+    piece.style.top = (d.gap_y - d.cell / 2) + "px";
+    piece.style.left = "0px";
+    const btn = document.getElementById("sliderBtn");
+    btn.style.left = "2px";
+    document.getElementById("sliderFill").style.width = "0px";
+    msg.textContent = t("slDrag"); msg.className = "slider-msg";
+  }).catch(() => {
+    msg.textContent = t("reqFail"); msg.className = "slider-msg";
+  });
+}
+function sliderSubmit() {
+  // 松手：计算终点位置 / 时长 / 轨迹点数，若前端判定太假直接重来
+  const d = _sliderDrag;
+  _sliderDrag = null;
+  document.getElementById("sliderBtn").classList.remove("dragging");
+  const btn = document.getElementById("sliderBtn");
+  const msg = document.getElementById("sliderMsg");
+  if (!d || !_sliderData) return;
+  const dur = Date.now() - d.t0;
+  const x = parseFloat(btn.style.left) + _sliderData.cell / 2;  // 碎片中心 x
+  if (dur < 300 || d.samples < 3) {
+    msg.textContent = t("slTooFast"); msg.className = "slider-msg";
+    setTimeout(loadSlider, 600);
+    return;
+  }
+  // 通过前端自检：真实提交登录/注册（后端会校验位置误差）
+  doRealSubmit({id: _sliderData.id, x: Math.round(x),
+                duration_ms: dur, samples: d.samples});
+}
+function initSliderEvents() {
+  const btn = document.getElementById("sliderBtn");
+  const piece = document.getElementById("sliderPiece");
+  const fill = document.getElementById("sliderFill");
+  btn.addEventListener("mousedown", e => {
+    e.preventDefault();
+    const trackW = _sliderData ? _sliderData.trackW : 280;
+    const cell = _sliderData ? _sliderData.cell : 40;
+    _sliderDrag = {startX: e.clientX, btnStart: parseFloat(btn.style.left) || 2,
+                   pieceStart: parseFloat(piece.style.left) || 0,
+                   t0: Date.now(), samples: 1,
+                   maxX: trackW - cell};
+    btn.classList.add("dragging"); piece.classList.add("dragging");
+    const onMove = ev => {
+      if (!_sliderDrag) return;
+      let dx = ev.clientX - _sliderDrag.startX;
+      let bx = Math.max(2, Math.min(_sliderDrag.maxX, _sliderDrag.btnStart + dx));
+      btn.style.left = bx + "px";
+      piece.style.left = (bx - 2) + "px";
+      fill.style.width = (bx - 2) + "px";
+      _sliderDrag.samples++;
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      piece.classList.remove("dragging");
+      sliderSubmit();
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  });
+}
+
 async function authSubmit() {
+  const username = $("authUsername").value.trim();
+  const password = $("authPassword").value;
+  const captcha = $("authCaptcha").value.trim();
+  const msg = $("authMsg");
+  // 前置格式校验（不弹滑块）
+  if (_authMode === "register") {
+    const uErr = usernameError(username);
+    if (uErr) { msg.textContent = uErr; return; }
+    const pErr = passwordError(password);
+    if (pErr) { msg.textContent = pErr; return; }
+    if (!captcha) { msg.textContent = t("needCaptcha"); return; }
+  } else {
+    if (!username || !password) { msg.textContent = t("needUserPass"); return; }
+    const uErr = usernameError(username);
+    if (uErr) { msg.textContent = uErr; return; }
+    const pErr = passwordError(password);
+    if (pErr) { msg.textContent = pErr; return; }
+  }
+  // 弹滑块人机验证；拖动完成后由 doRealSubmit 携带滑块参数提交
+  openSlider();
+}
+async function doRealSubmit(sliderInfo) {
   const username = $("authUsername").value.trim();
   const password = $("authPassword").value;
   const captcha = $("authCaptcha").value.trim();
@@ -244,30 +417,34 @@ async function authSubmit() {
   try {
     let path, body;
     if (_authMode === "register") {
-      const uErr = usernameError(username);
-      if (uErr) { msg.textContent = uErr; btn.disabled = false; return; }
-      const pErr = passwordError(password);
-      if (pErr) { msg.textContent = pErr; btn.disabled = false; return; }
-      if (!captcha) { msg.textContent = t("needCaptcha"); btn.disabled = false; return; }
       path = "/api/register";
-      body = {username, password, captcha_id: _captchaId, captcha};
+      body = {username, password, captcha_id: _captchaId, captcha,
+              slider_id: sliderInfo.id, slider_x: sliderInfo.x,
+              slider_duration_ms: sliderInfo.duration_ms, slider_samples: sliderInfo.samples};
     } else {
-      if (!username || !password) { msg.textContent = t("needUserPass"); btn.disabled = false; return; }
-      const uErr = usernameError(username);
-      if (uErr) { msg.textContent = uErr; btn.disabled = false; return; }
-      const pErr = passwordError(password);
-      if (pErr) { msg.textContent = pErr; btn.disabled = false; return; }
       path = "/api/login";
-      body = {username, password};
+      body = {username, password,
+              slider_id: sliderInfo.id, slider_x: sliderInfo.x,
+              slider_duration_ms: sliderInfo.duration_ms, slider_samples: sliderInfo.samples};
     }
     const r = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
     const d = await r.json();
     if (!r.ok) {
+      if (d.error && d.error.indexOf("滑块") >= 0) {
+        // 后端滑块校验失败：保留弹窗，刷新滑块重试
+        document.getElementById("sliderMsg").textContent = t("slFail");
+        document.getElementById("sliderMsg").className = "slider-msg";
+        loadSlider();
+        btn.disabled = false;
+        return;
+      }
+      closeSlider();
       msg.textContent = d.error || t("reqFail");
       if (_authMode === "register") loadCaptcha();
       btn.disabled = false;
       return;
     }
+    closeSlider();
     if (d.token) {
       try {
         localStorage.setItem("sf_token", d.token);
@@ -288,6 +465,7 @@ async function authSubmit() {
 $("authSubmit").addEventListener("click", authSubmit);
 $("authPassword").addEventListener("keydown", e => { if (e.key === "Enter") authSubmit(); });
 $("authCaptcha").addEventListener("keydown", e => { if (e.key === "Enter") authSubmit(); });
+initSliderEvents();
 
 // 页面加载：应用语言偏好（登录页优先显示登录；不做自动跳转，避免登录页⇄功能页闪烁）
 setLang(_lang);

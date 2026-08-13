@@ -1242,6 +1242,72 @@ _pending_shutdown_ts = None  # 页面关闭标记：30 秒内无新请求才退�
 # 会话与验证码存内存：服务重启后需重新登录（可接受，数据本身在 SQLite 持久化）
 _SESSIONS = {}       # token -> user_id
 _CAPTCHAS = {}       # captcha_id -> (answer, expire_ts)
+_SLIDERS = {}        # slider_id -> dict(gap_x, gap_y, colors, expire_ts) 滑块拼图缺口位置
+
+# 滑块拼图：7x4 网格色块背景 + 缺口碎片（零依赖 SVG）
+_SLIDER_W, _SLIDER_H, _SLIDER_CELL = 280, 160, 40  # 7x4 网格，每格 40x40
+_SLIDER_COLORS = ["#f87171", "#fb923c", "#facc15", "#4ade80", "#2dd4bf", "#60a5fa",
+                  "#a78bfa", "#f472b6", "#fbbf24", "#34d399", "#38bdf8", "#c084fc"]
+
+
+def _gen_slider():
+    """生成滑块拼图：随机色块网格背景 + 缺口位置。返回 (slider_id, bg_svg, piece_svg)。"""
+    import urllib.parse as _up
+    cols, rows = _SLIDER_W // _SLIDER_CELL, _SLIDER_H // _SLIDER_CELL
+    # 随机色块矩阵
+    grid = [[random.choice(_SLIDER_COLORS) for _ in range(cols)] for _ in range(rows)]
+    gx = random.randint(0, cols - 1)
+    gy = random.randint(0, rows - 1)
+    gap_px = gx * _SLIDER_CELL
+    gap_py = gy * _SLIDER_CELL
+    piece_color = grid[gy][gx]
+    sid = secrets.token_hex(8)
+    _SLIDERS[sid] = {"gap_x": gap_px + _SLIDER_CELL // 2,  # 缺口中心 x
+                     "gap_y": gap_py + _SLIDER_CELL // 2,
+                     "expire_ts": time.time() + 120}
+    now = time.time()
+    for k in [k for k, v in _SLIDERS.items() if v["expire_ts"] < now]:
+        del _SLIDERS[k]
+    # 背景：全部色块，缺口处画凹槽（深色 + 虚线边框）
+    parts = [f"<svg xmlns='http://www.w3.org/2000/svg' width='{_SLIDER_W}' height='{_SLIDER_H}' "
+             f"viewBox='0 0 {_SLIDER_W} {_SLIDER_H}'>"]
+    for ry in range(rows):
+        for rx in range(cols):
+            x, y = rx * _SLIDER_CELL, ry * _SLIDER_CELL
+            if rx == gx and ry == gy:
+                parts.append(f"<rect x='{x}' y='{y}' width='{_SLIDER_CELL}' height='{_SLIDER_CELL}' "
+                             f"fill='#64748b' stroke='#1e293b' stroke-width='2' stroke-dasharray='5,4'/>")
+            else:
+                parts.append(f"<rect x='{x}' y='{y}' width='{_SLIDER_CELL}' height='{_SLIDER_CELL}' "
+                             f"fill='{grid[ry][rx]}' stroke='#ffffff' stroke-width='1'/>")
+    parts.append("</svg>")
+    bg_svg = "data:image/svg+xml;utf8," + _up.quote("".join(parts))
+    # 碎片：缺口格子的色块（带边框阴影）
+    piece = (f"<svg xmlns='http://www.w3.org/2000/svg' width='{_SLIDER_CELL}' height='{_SLIDER_CELL}' "
+             f"viewBox='0 0 {_SLIDER_CELL} {_SLIDER_CELL}'>"
+             f"<rect x='0' y='0' width='{_SLIDER_CELL}' height='{_SLIDER_CELL}' fill='{piece_color}' "
+             f"stroke='#1e293b' stroke-width='2'/>"
+             f"<rect x='4' y='4' width='{_SLIDER_CELL - 8}' height='{_SLIDER_CELL - 8}' fill='none' "
+             f"stroke='rgba(255,255,255,.55)' stroke-width='1'/></svg>")
+    piece_svg = "data:image/svg+xml;utf8," + _up.quote(piece)
+    return sid, bg_svg, piece_svg
+
+
+def _verify_slider(slider_id, x, duration_ms, samples):
+    """校验滑块拼图：位置误差 <= 12px、拖动时长 >= 300ms、轨迹点数 >= 3。通过后一次性删除。"""
+    item = _SLIDERS.get(slider_id)
+    if not item or item["expire_ts"] < time.time():
+        return False
+    try:
+        x = float(x)
+        duration_ms = float(duration_ms or 0)
+        samples = int(samples or 0)
+    except (TypeError, ValueError):
+        return False
+    ok = (abs(x - item["gap_x"]) <= 12 and duration_ms >= 300 and samples >= 3)
+    if ok:
+        del _SLIDERS[slider_id]  # 一次性
+    return ok
 
 PWD_ITER = 100_000  # PBKDF2 迭代次数（密码哈希强度）
 
@@ -1444,6 +1510,13 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/captcha":
                 cid, svg = _gen_captcha()
                 self._send_json({"captcha_id": cid, "svg": svg})
+            elif path == "/api/slider":
+                sid, bg, piece = _gen_slider()
+                item = _SLIDERS.get(sid)
+                self._send_json({"slider_id": sid, "bg": bg, "piece": piece,
+                                 "track_w": _SLIDER_W, "track_h": _SLIDER_H,
+                                 "cell": _SLIDER_CELL,
+                                 "gap_y": item["gap_y"] if item else _SLIDER_CELL // 2})
             elif path == "/api/me":
                 uid, uname = _auth_user(self.headers)
                 if uid is None:
@@ -1488,6 +1561,13 @@ class Handler(BaseHTTPRequestHandler):
                 password = body.get("password") or ""
                 captcha_id = (body.get("captcha_id") or "").strip()
                 captcha = (body.get("captcha") or "").strip().upper()
+                # 滑块人机验证（防止机器人批量注册）：位置/时长/轨迹三重校验
+                if not _verify_slider(body.get("slider_id"),
+                                      body.get("slider_x"),
+                                      body.get("slider_duration_ms"),
+                                      body.get("slider_samples")):
+                    self._send_json({"error": "滑块验证失败，请重试"}, 400)
+                    return
                 # 用户名：仅字母/数字/下划线，长度 3-20
                 if not re.fullmatch(r"[A-Za-z0-9_]{3,20}", username):
                     self._send_json({"error": "用户名仅限字母/数字/下划线，长度 3-20 个字符"}, 400)
@@ -1530,6 +1610,13 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/login":
                 username = (body.get("username") or "").strip()
                 password = body.get("password") or ""
+                # 滑块人机验证（防止机器人批量撞库）
+                if not _verify_slider(body.get("slider_id"),
+                                      body.get("slider_x"),
+                                      body.get("slider_duration_ms"),
+                                      body.get("slider_samples")):
+                    self._send_json({"error": "滑块验证失败，请重试"}, 400)
+                    return
                 u = db.user_get_by_username(username)
                 if not u or not verify_password(password, u["password_hash"], u["salt"]):
                     self._send_json({"error": "用户名或密码错误"}, 401)
