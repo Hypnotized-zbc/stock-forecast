@@ -21,6 +21,8 @@ FILES=(
   tools/upload_github.py
   tools/backup_db.sh
   deploy/stock-forecast.service
+  deploy/start_server.bat
+  deploy/update_server.bat
   tests/test_backend.py
   requirements.txt
   README.md

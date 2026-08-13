@@ -83,6 +83,19 @@ sudo systemctl enable --now stock-forecast
 ```
 （部署前按注释修改路径/用户；日志：`journalctl -u stock-forecast -f`）
 
+### 方式三：Windows 云服务器（RDP 部署）
+项目内已附两个脚本（`deploy/` 目录）：
+- **`start_server.bat`** — 启动脚本。把数据库放到项目目录**外**的
+  `C:\stock-app\data\stock_forecast.db`（STOCK_DB 环境变量），公网监听 0.0.0.0:8000。
+  代码更新时永远不会覆盖数据目录。
+- **`update_server.bat`** — 一键更新脚本。流程：备份数据库 → 下载 GitHub 最新 ZIP →
+  解压替换代码 → 提示重启。全程不碰 `data` 目录。
+
+> **核心原则：数据库文件（stock_forecast.db）与代码目录分离。**
+> 更新代码时只替换 app.py/backend.py/db.py/static 等，**永远不要覆盖数据库文件**。
+> 后端每次启动会自动把数据库备份到 `backups/db/<时间戳>/`（保留最近 30 份），
+> 即使误操作也能找回。
+
 ### HTTPS（公网强烈建议）
 密码与 token 均建议加密传输。两种方式任选：
 1. **Caddy 反向代理（最简单，自动申请/续期证书）**：

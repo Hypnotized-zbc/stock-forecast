@@ -1844,6 +1844,38 @@ def open_browser(url):
     print(f"[!] 未找到 explorer.exe，请手动访问: {url}")
 
 
+def _backup_db_on_start():
+    """启动时自动备份数据库到 backups/db/<时间戳>/（保留最近 30 份）。
+    防止服务器更新代码时数据库被覆盖/误删导致用户数据丢失。"""
+    try:
+        db_path = db.db_info()["db_path"]
+        if not os.path.exists(db_path):
+            return
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        bak_dir = os.path.join(os.path.dirname(os.path.abspath(db_path)), "backups", "db", ts)
+        os.makedirs(bak_dir, exist_ok=True)
+        # 用 sqlite3 在线备份（WAL 模式下直接拷贝可能漏最新提交）
+        import sqlite3 as _sqlite3
+        src = _sqlite3.connect(db_path)
+        dst = _sqlite3.connect(os.path.join(bak_dir, "stock_forecast.db"))
+        try:
+            src.backup(dst)
+        finally:
+            src.close(); dst.close()
+        # 保留最近 30 份
+        parent = os.path.dirname(bak_dir)
+        try:
+            dirs = sorted(d for d in os.listdir(parent) if os.path.isdir(os.path.join(parent, d)))
+            for old in dirs[:-30]:
+                import shutil
+                shutil.rmtree(os.path.join(parent, old), ignore_errors=True)
+        except OSError:
+            pass
+        print(f"[i] 数据库已自动备份: backups/db/{ts}")
+    except Exception as exc:
+        print(f"[!] 数据库自动备份失败（不影响启动）: {exc}")
+
+
 def main():
     print("=" * 56)
     print("股票历史数据查询（浏览器界面 · 东方财富/新浪数据源）")
@@ -1851,6 +1883,7 @@ def main():
 
     db.init_db()  # 建表（幂等），数据库文件见 db.db_info()
     print(f"[i] 数据库: {db.db_info()['db_path']}")
+    _backup_db_on_start()  # 启动时自动备份数据库（防更新覆盖/误删）
 
     # 监听地址/端口：环境变量可覆盖（云部署用 STOCK_HOST=0.0.0.0 STOCK_PORT=8000）
     host = os.environ.get("STOCK_HOST", "127.0.0.1")
