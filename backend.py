@@ -71,6 +71,33 @@ PUBLIC_TOKEN = "D43BF722C8E33BDC906FB84D85E326E8"
 _leaderboard_cache = {"ts": 0.0, "data": {}}
 _fflow_cache = {"ts": 0.0, "data": {}}
 
+# 磁盘缓存目录（data/ 已被 .gitignore/备份排除，不会推到 GitHub）
+API_CACHE_DIR = Path(__file__).resolve().parent / "data" / "api_cache"
+
+
+def _disk_cache_get(key):
+    """读磁盘缓存。返回缓存对象（含 ts）；失败返回 None。"""
+    try:
+        p = API_CACHE_DIR / f"{key}.json"
+        if p.exists():
+            obj = json.loads(p.read_text(encoding="utf-8"))
+            if obj and "data" in obj:
+                return obj
+    except Exception:
+        pass
+    return None
+
+
+def _disk_cache_set(key, data):
+    """写磁盘缓存（数据 + 时间戳）。失败静默。"""
+    try:
+        API_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        (API_CACHE_DIR / f"{key}.json").write_text(
+            json.dumps({"ts": time.time(), "data": data}, ensure_ascii=False),
+            encoding="utf-8")
+    except Exception:
+        pass
+
 # K线字段（fields2 顺序固定）：
 # f51日期 f52开盘 f53收盘 f54最高 f55最低 f56成交量(手) f57成交额(元)
 # f58振幅 f59涨跌幅 f60涨跌额 f61换手率
@@ -1152,142 +1179,14 @@ def compute_fits(closes, dates=None, horizon=10):
 
 
 # ---------------------------------------------------------------------------
-# 预测回测闭环 / 排行榜 / 资金流向（v0.22.0）
-# ---------------------------------------------------------------------------
-FIT_ORDER = ["arima", "ets", "prophet", "svr", "rf"]
-
-
-def weighted_predict(fit, horizon=10):
-    """RMSE 逆加权平均最终预测（与前端 weightedPredict 完全同公式）。
-
-    返回 [horizon] 个预测值；无有效模型时返回 None 列表。
-    """
-    ws = {}
-    wsum = 0.0
-    if fit:
-        for k in FIT_ORDER:
-            r = fit.get(k)
-            if r and r.get("predict") and r.get("rmse") and r["rmse"] > 0:
-                ws[k] = 1.0 / r["rmse"]
-                wsum += ws[k]
-    out = []
-    for i in range(horizon):
-        s = 0.0
-        for k, w in ws.items():
-            p = fit[k]["predict"]
-            if i < len(p) and p[i] is not None:
-                s += w * p[i]
-        out.append(round(s / wsum, 4) if wsum > 0 else None)
-    return out
-
-
-def _log_predict(user_id, secid, name, fit):
-    """查询K线后落一条预测记录（同日同股同周期只保留最新）。失败不影响主流程。"""
-    if not fit or not fit.get("arima", {}).get("predict_dates"):
-        return
-    try:
-        pred_dates = fit["arima"]["predict_dates"]
-        fp = weighted_predict(fit, len(pred_dates))
-        if not any(v is not None for v in fp):
-            return
-        db.predict_log_upsert(user_id, secid, name, fit["arima"]["predict_dates"], fit, fp)
-    except Exception as exc:
-        print(f"[predict_log] 写入失败: {exc}")
-
-
-def _settle_predictions(uid, secid=None):
-    """结算预测记录：对已到期日拉实际收盘填入，并计算误差/方向命中。"""
-    records = db.predict_log_list(uid, secid=secid)
-    today = datetime.now().strftime("%Y-%m-%d")
-    # 未结算且含已到期日的记录 → 按股票分组拉K线（每只只拉一次）
-    pending = [r for r in records if not r["actuals"]]
-    need = [r for r in pending if any(d and d <= today for d in r["pred_dates"])]
-    kline_maps = {}
-    for r in need:
-        if r["secid"] in kline_maps:
-            continue
-        try:
-            start = datetime.now() - timedelta(days=120)
-            _, rows = fetch_kline(r["secid"], start, datetime.now(), "day")
-            kline_maps[r["secid"]] = {row[0]: float(row[2]) for row in rows}
-        except Exception:
-            kline_maps[r["secid"]] = {}
-    for r in need:
-        cmap = kline_maps.get(r["secid"], {})
-        actuals = [cmap.get(d) for d in r["pred_dates"]]
-        due_idx = [i for i, d in enumerate(r["pred_dates"]) if d and d <= today]
-        got = sum(1 for i in due_idx if actuals[i] is not None)
-        if due_idx and got > 0:
-            try:
-                db.predict_log_settle(uid, r["secid"], r["made_date"], actuals)
-            except Exception as exc:
-                print(f"[predict_log] 结算失败: {exc}")
-
-    # 重新读取（拿结算后的状态），再算指标
-    records = db.predict_log_list(uid, secid=secid)
-    out = []
-    summary = {"total": len(records), "settled": 0, "pending": 0,
-               "mae_sum": 0.0, "mae_n": 0, "dir_hit": 0, "dir_n": 0,
-               "avg_err_sum": 0.0, "avg_err_n": 0}
-    for r in records:
-        item = {"id": r["id"], "secid": r["secid"], "name": r["name"],
-                "made_date": r["made_date"], "made_at": r["made_at"],
-                "pred_dates": r["pred_dates"], "final_pred": r["final_pred"],
-                "actuals": r["actuals"], "settled_at": r["settled_at"],
-                "status": "pending", "mae": None, "rmse": None,
-                "dir_hit": None, "dir_total": None, "settled_days": 0}
-        if r["actuals"]:
-            errs = []
-            dir_ok = 0
-            dir_n = 0
-            settled_days = 0
-            for i in range(len(r["pred_dates"]) - 1):
-                p = r["final_pred"][i] if i < len(r["final_pred"]) else None
-                p2 = r["final_pred"][i + 1] if i + 1 < len(r["final_pred"]) else None
-                a = r["actuals"][i]
-                a2 = r["actuals"][i + 1]
-                if a is None or a2 is None:
-                    continue
-                settled_days = i + 2
-                if p is not None and p2 is not None:
-                    errs.append(p - a)
-                    if (p2 > p and a2 > a) or (p2 < p and a2 < a):
-                        dir_ok += 1
-                    dir_n += 1
-            item["settled_days"] = settled_days
-            if errs:
-                mae = sum(abs(e) for e in errs) / len(errs)
-                rmse = (sum(e * e for e in errs) / len(errs)) ** 0.5
-                item["mae"] = round(mae, 4)
-                item["rmse"] = round(rmse, 4)
-                item["dir_hit"] = dir_ok
-                item["dir_total"] = dir_n
-                # 平均误差（带符号，看系统性偏大/偏小）
-                avg_err = sum(errs) / len(errs)
-                summary["mae_sum"] += mae
-                summary["mae_n"] += 1
-                summary["dir_hit"] += dir_ok
-                summary["dir_n"] += dir_n
-                summary["avg_err_sum"] += avg_err
-                summary["avg_err_n"] += 1
-            item["status"] = "settled"
-            summary["settled"] += 1
-        else:
-            summary["pending"] += 1
-        out.append(item)
-    summary["avg_mae"] = round(summary["mae_sum"] / summary["mae_n"], 4) if summary["mae_n"] else None
-    summary["dir_rate"] = round(summary["dir_hit"] / summary["dir_n"], 4) if summary["dir_n"] else None
-    summary["avg_err"] = round(summary["avg_err_sum"] / summary["avg_err_n"], 4) if summary["avg_err_n"] else None
-    return {"items": out, "summary": summary}
-
-
 def fetch_leaderboard(kind="up", size=100):
     """沪深A股排行榜（东财 clist）。kind: up=涨幅榜 / down=跌幅榜 / amount=成交额 /
-    turnover=换手率 / volratio=量比。60 秒缓存。
+    turnover=换手率 / volratio=量比。60 秒内存缓存 + 磁盘缓存兜底（接口失败时
+    返回上次成功数据，标注 cached=true，避免信息源抖动导致页面空白）。
 
     fs 含义：m:0+t:6 深A主板、m:0+t:80 深A(含创业)、m:1+t:2 沪A主板、m:1+t:23 沪A(含科创)。
     """
-    key = kind
+    key = f"lb_{kind}"
     now = time.time()
     if _leaderboard_cache["ts"] and now - _leaderboard_cache["ts"] < 60:
         cached = _leaderboard_cache["data"].get(key)
@@ -1301,41 +1200,55 @@ def fetch_leaderboard(kind="up", size=100):
         "fid": fid, "fs": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23",
         "fields": "f2,f3,f4,f5,f6,f8,f9,f10,f12,f13,f14,f15,f16,f17,f18,f20,f21,f23",
     }
-    data = get_json(CLIST_API, params, retries=3, timeout=8).get("data") or {}
-    diff = data.get("diff") or []
     rows = []
-    for it in diff:
-        def num(k):
-            try:
-                v = float(it.get(k))
-                return v
-            except (TypeError, ValueError):
-                return None
-        code = str(it.get("f12") or "")
-        market = it.get("f13")
-        secid = (("1." if market == 1 else "0.") + code) if code else ""
-        rows.append({
-            "rank": len(rows) + 1,
-            "code": code, "name": it.get("f14") or code, "secid": secid,
-            "price": num("f2"), "change_pct": num("f3"), "change": num("f4"),
-            "volume": num("f5"), "amount": num("f6"), "turnover": num("f8"),
-            "volratio": num("f10"), "pe": num("f9"), "pb": num("f23"),
-            "mktcap": num("f20"), "float_mktcap": num("f21"),
-        })
-    res = {"kind": kind, "total": data.get("total") or len(rows), "items": rows}
-    _leaderboard_cache["ts"] = now
-    _leaderboard_cache["data"][key] = res
-    return res
+    total = 0
+    try:
+        data = get_json(CLIST_API, params, retries=3, timeout=8).get("data") or {}
+        diff = data.get("diff") or []
+        total = data.get("total") or len(diff)
+        for it in diff:
+            def num(k):
+                try:
+                    return float(it.get(k))
+                except (TypeError, ValueError):
+                    return None
+            code = str(it.get("f12") or "")
+            market = it.get("f13")
+            secid = (("1." if market == 1 else "0.") + code) if code else ""
+            rows.append({
+                "rank": len(rows) + 1,
+                "code": code, "name": it.get("f14") or code, "secid": secid,
+                "price": num("f2"), "change_pct": num("f3"), "change": num("f4"),
+                "volume": num("f5"), "amount": num("f6"), "turnover": num("f8"),
+                "volratio": num("f10"), "pe": num("f9"), "pb": num("f23"),
+                "mktcap": num("f20"), "float_mktcap": num("f21"),
+            })
+    except Exception as exc:
+        print(f"[leaderboard] 东财接口失败({kind}): {exc}")
+    if rows:
+        res = {"kind": kind, "total": total, "items": rows, "cached": False}
+        _leaderboard_cache["ts"] = now
+        _leaderboard_cache["data"][key] = res
+        _disk_cache_set(key, res)
+        return res
+    # 兜底：磁盘缓存（上次成功数据，可能过期，标注 cached）
+    stale = _disk_cache_get(key)
+    if stale and stale.get("data", {}).get("items"):
+        stale["data"]["cached"] = True
+        stale["data"]["cache_ts"] = time.strftime("%m-%d %H:%M", time.localtime(stale.get("ts") or 0))
+        return stale["data"]
+    raise ConnectionError("排行榜数据源请求失败，且无可用缓存")
 
 
 def fetch_fflow(secid, days=30):
     """个股历史资金流（东财 fflow 日K）。返回日期升序列表，单位：元。
 
     字段：f51日期 f52主力净流入 f53小单 f54中单 f55大单 f56超大单
-          f62收盘价 f63涨跌幅。60 秒缓存。
+          f62收盘价 f63涨跌幅。60 秒内存缓存 + 磁盘缓存兜底（接口失败时
+          返回上次成功数据，标注 cached=true）。
     """
     days = max(5, min(120, int(days)))
-    key = f"{secid}|{days}"
+    key = f"fflow_{secid}_{days}"
     now = time.time()
     if _fflow_cache["ts"] and now - _fflow_cache["ts"] < 60:
         cached = _fflow_cache["data"].get(key)
@@ -1346,31 +1259,43 @@ def fetch_fflow(secid, days=30):
         "fields1": "f1,f2,f3,f7",
         "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63",
     }
-    data = get_json(FFLOW_API, params, retries=3, timeout=8).get("data") or {}
-    klines = data.get("klines") or []
     items = []
-    for line in klines:
-        f = line.split(",")
-        def num(i):
-            try:
-                if i >= len(f) or f[i] in ("", "-"):
+    try:
+        data = get_json(FFLOW_API, params, retries=3, timeout=8).get("data") or {}
+        klines = data.get("klines") or []
+        for line in klines:
+            f = line.split(",")
+            def num(i):
+                try:
+                    if i >= len(f) or f[i] in ("", "-"):
+                        return None
+                    return round(float(f[i]), 2)
+                except (TypeError, ValueError):
                     return None
-                return round(float(f[i]), 2)
-            except (TypeError, ValueError):
-                return None
-        items.append({
-            "date": f[0] if f else "",
-            "main": num(1), "small": num(2), "mid": num(3),
-            "big": num(4), "xbig": num(5),
-            "close": num(11) if len(f) > 11 else None,
-            "change_pct": num(12) if len(f) > 12 else None,
-        })
-    items = [it for it in items if it["date"]]
-    items.reverse()  # 东财返回倒序 → 日期升序
-    res = {"secid": secid, "days": days, "items": items}
-    _fflow_cache["ts"] = now
-    _fflow_cache["data"][key] = res
-    return res
+            items.append({
+                "date": f[0] if f else "",
+                "main": num(1), "small": num(2), "mid": num(3),
+                "big": num(4), "xbig": num(5),
+                "close": num(11) if len(f) > 11 else None,
+                "change_pct": num(12) if len(f) > 12 else None,
+            })
+        items = [it for it in items if it["date"]]
+        items.reverse()  # 东财返回倒序 → 日期升序
+    except Exception as exc:
+        print(f"[fflow] 东财接口失败({secid}): {exc}")
+    if items:
+        res = {"secid": secid, "days": days, "items": items, "cached": False}
+        _fflow_cache["ts"] = now
+        _fflow_cache["data"][key] = res
+        _disk_cache_set(key, res)
+        return res
+    # 兜底：磁盘缓存（上次成功数据，可能过期，标注 cached）
+    stale = _disk_cache_get(key)
+    if stale and stale.get("data", {}).get("items"):
+        stale["data"]["cached"] = True
+        stale["data"]["cache_ts"] = time.strftime("%m-%d %H:%M", time.localtime(stale.get("ts") or 0))
+        return stale["data"]
+    raise ConnectionError("资金流数据源请求失败，且无可用缓存")
 
 
 _AI_KEY = None
@@ -1771,10 +1696,6 @@ class Handler(BaseHTTPRequestHandler):
                 # 三种模型拟合 + 未来10日预测（纯 Python，零第三方依赖）
                 data["fit"] = compute_fits([float(r[2]) for r in rows],
                                            [r[0] for r in rows])
-                # 预测回测闭环：登录用户查询即落一条预测记录（同日同股只留最新）
-                uid, _uname = _auth_user(self.headers)
-                if uid is not None:
-                    _log_predict(uid, secid, name, data["fit"])
                 try:
                     save_csv(rows)  # 留档，失败不影响响应
                 except Exception:
@@ -1832,14 +1753,6 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 limit = int((params.get("limit") or ["50"])[0])
                 self._send_json({"items": db.history_get(uid, limit=limit)})
-            elif path == "/api/predict-log":
-                # 预测回测闭环：查询预测记录，自动结算已到期日
-                uid, uname = _auth_user(self.headers)
-                if uid is None:
-                    _send_auth_error(self)
-                    return
-                secid = (params.get("secid") or [""])[0].strip() or None
-                self._send_json(_settle_predictions(uid, secid))
             elif path == "/api/leaderboard":
                 kind = (params.get("kind") or ["up"])[0].strip()
                 if kind not in ("up", "down", "amount", "turnover", "volratio"):

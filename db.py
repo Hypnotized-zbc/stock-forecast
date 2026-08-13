@@ -82,23 +82,6 @@ def init_db():
                 expire_ts REAL NOT NULL,
                 created_at TEXT NOT NULL
             )""")
-        # 预测回测闭环（v0.22.0）：记录每次预测，到期后结算实际收盘
-        # made_date 为预测发起日（YYYY-MM-DD），同日同股只保留最新一条
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS predict_log (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id     TEXT NOT NULL DEFAULT 'default',
-                secid       TEXT NOT NULL,
-                name        TEXT NOT NULL DEFAULT '',
-                made_date   TEXT NOT NULL,
-                made_at     TEXT NOT NULL,
-                pred_dates  TEXT NOT NULL,
-                models      TEXT NOT NULL,
-                final_pred  TEXT NOT NULL,
-                actuals     TEXT,
-                settled_at  TEXT,
-                UNIQUE(user_id, secid, made_date)
-            )""")
         conn.commit()
     finally:
         conn.close()
@@ -171,10 +154,10 @@ def user_update_password(user_id, password_hash, salt):
 
 
 def user_delete(user_id):
-    """注销账号：删除用户及其所有数据（自选股/AI缓存/历史/会话/预测记录）。"""
+    """注销账号：删除用户及其所有数据（自选股/AI缓存/历史/会话）。"""
     conn = _conn()
     try:
-        for table in ("sessions", "watchlist", "ai_cache", "history", "predict_log"):
+        for table in ("sessions", "watchlist", "ai_cache", "history"):
             conn.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
         conn.execute("DELETE FROM users WHERE user_id=?", (user_id,))
         conn.commit()
@@ -333,95 +316,6 @@ def history_get(user_id=DEFAULT_USER, limit=50):
             "SELECT secid, name, ts FROM history WHERE user_id=? ORDER BY id DESC LIMIT ?",
             (user_id, limit)).fetchall()
         return [{"secid": r[0], "name": r[1], "ts": r[2]} for r in rows]
-    finally:
-        conn.close()
-
-
-# ---------------- predict_log（预测回测闭环） ----------------
-
-def predict_log_upsert(user_id, secid, name, pred_dates, models, final_pred):
-    """写入/更新一条预测记录。同日同股只保留最新（INSERT OR REPLACE）。
-
-    每用户每股最多保留最近 20 条，防止无限膨胀。
-    """
-    made_date = time.strftime("%Y-%m-%d")
-    made_at = time.strftime("%Y-%m-%d %H:%M:%S")
-    conn = _conn()
-    try:
-        conn.execute(
-            "INSERT OR REPLACE INTO predict_log "
-            "(user_id, secid, name, made_date, made_at, pred_dates, models, final_pred, actuals, settled_at) "
-            "VALUES (?,?,?,?,?,?,?,?,NULL,NULL)",
-            (user_id, secid, name, made_date, made_at,
-             json.dumps(pred_dates, ensure_ascii=False),
-             json.dumps(models, ensure_ascii=False),
-             json.dumps(final_pred, ensure_ascii=False)))
-        # 清理：每用户每股只留最近 20 条（按 id 倒序）
-        conn.execute(
-            "DELETE FROM predict_log WHERE user_id=? AND secid=? AND id NOT IN "
-            "(SELECT id FROM predict_log WHERE user_id=? AND secid=? ORDER BY id DESC LIMIT 20)",
-            (user_id, secid, user_id, secid))
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def predict_log_list(user_id=DEFAULT_USER, secid=None, limit=100):
-    """查询预测记录（倒序）。secid 可选过滤。"""
-    conn = _conn()
-    try:
-        if secid:
-            rows = conn.execute(
-                "SELECT id, secid, name, made_date, made_at, pred_dates, models, final_pred, actuals, settled_at "
-                "FROM predict_log WHERE user_id=? AND secid=? ORDER BY id DESC LIMIT ?",
-                (user_id, secid, limit)).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT id, secid, name, made_date, made_at, pred_dates, models, final_pred, actuals, settled_at "
-                "FROM predict_log WHERE user_id=? ORDER BY id DESC LIMIT ?",
-                (user_id, limit)).fetchall()
-        out = []
-        for r in rows:
-            def _load(s, default):
-                try:
-                    return json.loads(s) if s else default
-                except (TypeError, ValueError):
-                    return default
-            out.append({
-                "id": r[0], "secid": r[1], "name": r[2],
-                "made_date": r[3], "made_at": r[4],
-                "pred_dates": _load(r[5], []),
-                "models": _load(r[6], {}),
-                "final_pred": _load(r[7], []),
-                "actuals": _load(r[8], None),
-                "settled_at": r[9],
-            })
-        return out
-    finally:
-        conn.close()
-
-
-def predict_log_settle(user_id, secid, made_date, actuals):
-    """结算：写入实际收盘序列与结算时间。"""
-    conn = _conn()
-    try:
-        conn.execute(
-            "UPDATE predict_log SET actuals=?, settled_at=? "
-            "WHERE user_id=? AND secid=? AND made_date=?",
-            (json.dumps(actuals, ensure_ascii=False),
-             time.strftime("%Y-%m-%d %H:%M:%S"),
-             user_id, secid, made_date))
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def predict_log_delete_user(user_id):
-    """注销账号时清理该用户全部预测记录。"""
-    conn = _conn()
-    try:
-        conn.execute("DELETE FROM predict_log WHERE user_id=?", (user_id,))
-        conn.commit()
     finally:
         conn.close()
 

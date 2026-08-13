@@ -2,7 +2,7 @@
 
 一个**零第三方依赖**的 A 股行情分析与预测工具：东财/新浪双数据源、Canvas 手绘 K 线、
 纯 Python 实现的 5 模型拟合与未来预测、全屏放大交互、AI 技术解读、多用户账号体系。
-**顶部导航栏多板块**：行情分析 / 排行榜 / 资金流向 / 历史统计 / 预测战绩。
+**顶部导航栏多板块**：行情分析 / 排行榜 / 资金流向 / 历史统计。
 
 > 仅供学习研究，不构成任何投资建议。
 
@@ -13,10 +13,10 @@
 ### 板块导航（顶部栏目，点击切换）
 - **行情分析**：搜索/自选股/K线/拟合/预测/AI/对比/分享（原有全部功能）
 - **排行榜**：沪深A股 涨幅/跌幅/成交额/换手率/量比 五大榜单，点击行直达行情分析
-- **资金流向**：个股主力/超大/大/中/小单净流入柱状图 + 全列数据表（10~120 日）
-- **历史统计**：区间/年化收益、波动率、夏普、最大回撤 + 日收益率分布直方图
-- **预测战绩**：预测回测闭环——每次查询自动记录预测，到期自动结算实际收盘，
-  统计 MAE / 方向命中率 / 平均误差，展开逐日预测 vs 实际对比
+- **资金流向**：个股主力/超大/大/中/小单净流入柱状图 + 全列数据表（10~120 日），
+  自带查询与自选股切换
+- **历史统计**：区间/年化收益、波动率、夏普、最大回撤 + 日收益率分布直方图，
+  自带查询与自选股切换
 
 ### 图表
 - **K线 / MA5 / BOLL / 成交量 / 涨跌幅 / MACD / KDJ / RSI** 多种视图，Canvas 手绘（红涨绿跌）
@@ -27,7 +27,6 @@
 ### 预测（纯 Python，零依赖）
 - **ARIMA / ETS / Prophet(轻量) / SVR / 随机森林** 五模型拟合并给出未来 10 日预测
 - 按 RMSE 逆加权的最终预测，右侧面板展示指标
-- **回测闭环**：预测落库 predict_log，到期自动拉实际收盘对账（MAE/方向命中率）
 
 ### 智能与增强
 - **✨ AI 技术解读**：调用 DeepSeek 对最近 20 日行情生成中文分析（趋势/支撑压力/风险）
@@ -126,8 +125,8 @@ sudo systemctl enable --now stock-forecast
 ./tools/backup_db.sh nightly    # 可加备注
 # 建议 crontab：0 3 * * * /path/to/stock-forecast/tools/backup_db.sh nightly
 ```
-数据库文件路径可用 `STOCK_DB` 覆盖；五张表：`users` 用户、`watchlist` 自选股、
-`ai_cache` AI解读缓存、`history` 查询历史、`predict_log` 预测回测记录。
+数据库文件路径可用 `STOCK_DB` 覆盖；四张表：`users` 用户、`watchlist` 自选股、
+`ai_cache` AI解读缓存、`history` 查询历史。
 
 ---
 
@@ -197,9 +196,8 @@ stock-forecast/
 | `/api/watchlist` | 自选股列表（GET）／增删（POST: action=add/remove, secid, name），需登录 |
 | `/api/ai-cache` | AI 解读缓存（GET: ?secid=&period= ／POST 保存） |
 | `/api/history` | 查询历史（GET ／POST 记录） |
-| `/api/predict-log` | 预测回测记录（GET：自动结算已到期预测日，返回记录+汇总；需登录） |
-| `/api/leaderboard?kind=` | 沪深A股排行榜（kind: up/down/amount/turnover/volratio，60 秒缓存） |
-| `/api/fflow?secid=&days=` | 个股历史资金流（主力/超大/大/中/小单净流入，10~120 日，60 秒缓存） |
+| `/api/leaderboard?kind=` | 沪深A股排行榜（kind: up/down/amount/turnover/volratio，60 秒缓存 + 磁盘缓存兜底） |
+| `/api/fflow?secid=&days=` | 个股历史资金流（主力/超大/大/中/小单净流入，10~120 日，60 秒缓存 + 磁盘缓存兜底） |
 | `/api/shutdown` | 页面关闭信号（仅本地模式生效） |
 
 > 登录/注册/改密/重置密码均需先通过滑块验证：前端拖动拼图后提交
