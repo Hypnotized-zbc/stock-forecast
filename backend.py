@@ -83,17 +83,39 @@ _fflow_cache = {"ts": 0.0, "data": {}}
 API_CACHE_DIR = Path(__file__).resolve().parent / "data" / "api_cache"
 
 
-def _disk_cache_get(key):
-    """读磁盘缓存。返回缓存对象（含 ts）；失败返回 None。"""
+def _disk_cache_get(key, max_age=86400):
+    """读磁盘缓存；超过 max_age 秒（默认 1 天）视为过期并删除文件。
+
+    当日缓存策略：今天获取过的资金流/排行榜直接用，不再请求数据源；
+    跨天后旧缓存删除（防冗余），重新获取并落盘。
+    返回缓存对象（含 ts）；不存在/过期/损坏返回 None。
+    """
     try:
         p = API_CACHE_DIR / f"{key}.json"
         if p.exists():
             obj = json.loads(p.read_text(encoding="utf-8"))
             if obj and "data" in obj:
-                return obj
+                if time.time() - obj.get("ts", 0) <= max_age:
+                    return obj
+                p.unlink()  # 过期即删，防冗余
     except Exception:
         pass
     return None
+
+
+def _disk_cache_cleanup(max_age=86400):
+    """清理过期缓存文件（启动时调用，防止磁盘积累旧数据）。"""
+    try:
+        now = time.time()
+        for p in API_CACHE_DIR.glob("*.json"):
+            try:
+                obj = json.loads(p.read_text(encoding="utf-8"))
+                if now - obj.get("ts", 0) > max_age:
+                    p.unlink()
+            except Exception:
+                p.unlink()
+    except Exception:
+        pass
 
 
 def _disk_cache_set(key, data):
@@ -1286,6 +1308,12 @@ def fetch_leaderboard(kind="up", size=100):
         cached = _leaderboard_cache["data"].get(key)
         if cached:
             return cached
+    # 磁盘当日缓存优先：今天获取过就直接用，不再请求数据源（行情日内基本不变）
+    disk = _disk_cache_get(key)
+    if disk and disk.get("data", {}).get("items"):
+        disk["data"]["cached"] = True
+        disk["data"]["cache_ts"] = time.strftime("%m-%d %H:%M", time.localtime(disk.get("ts") or 0))
+        return disk["data"]
     rows = []
     total = 0
     source = ""
@@ -1356,6 +1384,12 @@ def fetch_fflow(secid, days=30):
         cached = _fflow_cache["data"].get(key)
         if cached:
             return cached
+    # 磁盘当日缓存优先：今天获取过就直接用，不再请求数据源
+    disk = _disk_cache_get(key)
+    if disk and disk.get("data", {}).get("items"):
+        disk["data"]["cached"] = True
+        disk["data"]["cache_ts"] = time.strftime("%m-%d %H:%M", time.localtime(disk.get("ts") or 0))
+        return disk["data"]
     items = []
     source = ""
     # 源1：东财
@@ -1413,32 +1447,19 @@ def fetch_fflow(secid, days=30):
 
 
 def _prefetch_rank_cache():
-    """启动后后台预取排行榜 5 类缓存（东财失败自动走新浪）。
+    """启动后后台预取排行榜缓存（当日无缓存时才有意义，东财失败自动走新浪）。
 
-    保证打开排行榜板块时有数据可用；失败静默，不影响启动。
+    量比榜已删除（新浪源无此字段、东财接口不稳，永远加载不出来）。
+    失败静默，不影响启动。
     """
     def work():
-        for kind in ("up", "down", "amount", "turnover", "volratio"):
+        for kind in ("up", "down", "amount", "turnover"):
             try:
                 fetch_leaderboard(kind)
                 print(f"[cache] 排行榜预取成功: {kind}")
             except Exception as exc:
                 print(f"[cache] 排行榜预取失败({kind}): {exc}")
     threading.Thread(target=work, daemon=True).start()
-
-
-def _cache_refresh_loop():
-    """后台定时刷新排行榜缓存（每 2 小时一次，覆盖每日数据更新）。"""
-    def loop():
-        while True:
-            time.sleep(7200)
-            for kind in ("up", "down", "amount", "turnover", "volratio"):
-                try:
-                    _leaderboard_cache["ts"] = 0.0  # 绕过 60s 内存缓存，强制重新请求
-                    fetch_leaderboard(kind)
-                except Exception:
-                    pass
-    threading.Thread(target=loop, daemon=True).start()
 
 
 _AI_KEY = None
@@ -2339,8 +2360,8 @@ def main():
     db.session_cleanup()  # 清理过期会话（防 sessions 表无限增长）
     print(f"[i] 数据库: {db.db_info()['db_path']}")
     _backup_db_on_start()  # 启动时自动备份数据库（防更新覆盖/误删）
-    _prefetch_rank_cache()  # 后台预取排行榜缓存（东财→新浪，保证打开即有数据）
-    _cache_refresh_loop()   # 后台每 2 小时刷新排行榜缓存
+    _disk_cache_cleanup()  # 清理过期缓存文件（每日更新，旧的删掉防冗余）
+    _prefetch_rank_cache()  # 后台预取排行榜缓存（东财→新浪，当日无缓存时保证打开即有数据）
 
     # 监听地址/端口：环境变量可覆盖（云部署用 STOCK_HOST=0.0.0.0 STOCK_PORT=8000）
     host = os.environ.get("STOCK_HOST", "127.0.0.1")
