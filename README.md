@@ -183,6 +183,7 @@ stock-forecast/
 | `/api/me` | 当前登录用户（GET，带 Bearer token） |
 | `/api/change-password` | 修改密码（POST: email, new_password, captcha_id, captcha, slider_*，带 Bearer token，需登录） |
 | `/api/delete-account` | 注销账号（POST，带 Bearer token，删除该用户全部数据） |
+| `/api/reset-password` | 忘记密码（POST: username, email, new_password, captcha_id, captcha, slider_*，无需登录） |
 | `/api/watchlist` | 自选股列表（GET）／增删（POST: action=add/remove, secid, name），需登录 |
 | `/api/ai-cache` | AI 解读缓存（GET: ?secid=&period= ／POST 保存） |
 | `/api/history` | 查询历史（GET ／POST 记录） |
