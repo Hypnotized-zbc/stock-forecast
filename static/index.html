@@ -8,6 +8,20 @@
   body { font-family: "Microsoft YaHei", sans-serif; margin: 20px; background: #f7f8fa; }
   .header { max-width: 1180px; margin: 0 auto 12px; }
   h2 { margin: 0 0 10px; font-size: 20px; color: #222; }
+  .lang-switch {
+    display: inline-flex; border-radius: 20px; overflow: hidden;
+    box-shadow: 0 1px 4px rgba(0,0,0,.12); margin-left: 10px; vertical-align: middle;
+  }
+  .lang-switch .lang-item {
+    padding: 4px 14px; font-size: 12px; cursor: pointer;
+    background: #fff; color: #6b7280;
+    border: 1px solid #d1d5db;
+    transition: background .15s, color .15s;
+    user-select: none;
+  }
+  .lang-switch .lang-item:first-child { border-radius: 20px 0 0 20px; }
+  .lang-switch .lang-item:last-child { border-radius: 0 20px 20px 0; }
+  .lang-switch .lang-item.active { background: #2563eb; color: #fff; border-color: #2563eb; }
   .query-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
                background: #fff; border-radius: 8px; padding: 12px 14px;
                box-shadow: 0 2px 8px rgba(0,0,0,.06); }
@@ -132,45 +146,51 @@
 <body>
 <div class="header">
   <div style="display:flex;justify-content:space-between;align-items:center">
-    <h2>股票历史数据查询</h2>
-    <div id="authArea" style="font-size:13px"><span style="color:#9ca3af">请登录</span></div>
+    <h2 data-i18n="appTitle">股票历史数据查询</h2>
+    <div style="display:flex;align-items:center">
+      <div class="lang-switch">
+        <span class="lang-item" data-lang="en">Eng</span>
+        <span class="lang-item active" data-lang="zh">中文</span>
+      </div>
+      <div id="authArea" style="font-size:13px"><span style="color:#9ca3af" data-i18n="pleaseLogin">请登录</span></div>
+    </div>
   </div>
   <div class="query-row">
-    <label for="stockInput">查询股票：</label>
-    <input type="text" id="stockInput" placeholder="名称或代码，如：601088 / 中国神华 / 600519" autofocus>
+    <label for="stockInput" data-i18n="queryLabel">查询股票：</label>
+    <input type="text" id="stockInput" data-i18n-ph="phStock" placeholder="名称或代码，如：601088 / 中国神华 / 600519" autofocus>
     <input type="date" id="startDate">
     <span style="color:#999">~</span>
     <input type="date" id="endDate">
-    <button id="searchBtn">查询</button>
+    <button id="searchBtn" data-i18n="btnSearch">查询</button>
     <span id="status"></span>
   </div>
   <div id="candidateBox"></div>
   <div id="watchlist" class="wl-bar"></div>
 </div>
 <div class="cur-stock-line">
-  <span class="cur-stock" id="curStock"><span class="cur-none">尚未查询股票</span></span>
+  <span class="cur-stock" id="curStock"><span class="cur-none" data-i18n="noStock">尚未查询股票</span></span>
 </div>
 <div class="tabs">
-  <button class="tab active" id="tabChart">行情图表</button>
-  <button class="tab" id="tabFit">模型拟合</button>
-  <button class="tab" id="tabFuture">未来预测</button>
+  <button class="tab active" id="tabChart" data-i18n="tabChart">行情图表</button>
+  <button class="tab" id="tabFit" data-i18n="tabFit">模型拟合</button>
+  <button class="tab" id="tabFuture" data-i18n="tabFuture">未来预测</button>
 </div>
 <div class="row2" id="chartControls">
   <select id="chartType">
-    <option value="kline">日K线图（蜡烛图）</option>
-    <option value="kline-week">周K线图</option>
-    <option value="kline-month">月K线图</option>
-    <option value="ma5">5日均线图</option>
-    <option value="boll">布林带 BOLL 图</option>
-    <option value="vol">成交量 VOL 图</option>
-    <option value="change">涨跌幅柱状图</option>
-    <option value="macd">MACD 指标</option>
-    <option value="kdj">KDJ 指标</option>
-    <option value="rsi">RSI 指标</option>
+    <option value="kline" data-i18n="optKline">日K线图（蜡烛图）</option>
+    <option value="kline-week" data-i18n="optKlineWeek">周K线图</option>
+    <option value="kline-month" data-i18n="optKlineMonth">月K线图</option>
+    <option value="ma5" data-i18n="optMa5">5日均线图</option>
+    <option value="boll" data-i18n="optBoll">布林带 BOLL 图</option>
+    <option value="vol" data-i18n="optVol">成交量 VOL 图</option>
+    <option value="change" data-i18n="optChange">涨跌幅柱状图</option>
+    <option value="macd" data-i18n="optMacd">MACD 指标</option>
+    <option value="kdj" data-i18n="optKdj">KDJ 指标</option>
+    <option value="rsi" data-i18n="optRsi">RSI 指标</option>
   </select>
-  <button id="aiBtn" style="margin-left:6px;padding:3px 12px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;font-size:13px">✨ AI 解读</button>
-  <button id="cmpBtn" style="margin-left:6px;padding:3px 12px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;font-size:13px">⇄ 多股对比</button>
-  <button id="shareBtn" style="margin-left:6px;padding:3px 12px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;font-size:13px">📋 分享卡片</button>
+  <button id="aiBtn" style="margin-left:6px;padding:3px 12px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;font-size:13px" data-i18n="btnAi">✨ AI 解读</button>
+  <button id="cmpBtn" style="margin-left:6px;padding:3px 12px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;font-size:13px" data-i18n="btnCmp">⇄ 多股对比</button>
+  <button id="shareBtn" style="margin-left:6px;padding:3px 12px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;font-size:13px" data-i18n="btnShare">📋 分享卡片</button>
   <span class="sub" id="rangeInfo"></span>
 </div>
 <div id="aiPanel" class="ai-panel" style="display:none"></div>
@@ -181,11 +201,11 @@
     <div class="legend" id="legend"></div>
   </div>
   <div id="fitPanel" style="display:none">
-    <div class="f-title">模型拟合结果</div>
+    <div class="f-title" data-i18n="fitTitle">模型拟合结果</div>
     <div id="fitBody"></div>
   </div>
   <div id="futurePanel" style="display:none">
-    <div class="f-title">未来10日预测</div>
+    <div class="f-title" data-i18n="futureTitle">未来10日预测</div>
     <div id="futureBody"></div>
   </div>
 </div>
@@ -199,18 +219,18 @@
 </div>
 <div id="compareOverlay">
   <div class="cmp-box">
-    <div class="cmp-head">多股归一化对比（以所选范围首日收盘 = 100）</div>
+    <div class="cmp-head" data-i18n="cmpTitle">多股归一化对比（以所选范围首日收盘 = 100）</div>
     <div class="cmp-list" id="cmpList"></div>
     <div class="cmp-range">
-      <label>日期范围：</label>
+      <label data-i18n="cmpRange">日期范围：</label>
       <input type="date" id="cmpFrom">
       <span>~</span>
       <input type="date" id="cmpTo">
       <span class="cmp-range-tip" id="cmpRangeTip"></span>
     </div>
     <div style="text-align:center;margin:8px 0">
-      <button id="cmpGo" style="padding:6px 18px;border:none;border-radius:6px;background:#2563eb;color:#fff;cursor:pointer">生成对比图</button>
-      <button id="cmpClose" style="padding:6px 18px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;margin-left:8px">关闭</button>
+      <button id="cmpGo" style="padding:6px 18px;border:none;border-radius:6px;background:#2563eb;color:#fff;cursor:pointer" data-i18n="cmpGo">生成对比图</button>
+      <button id="cmpClose" style="padding:6px 18px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;margin-left:8px" data-i18n="cmpClose">关闭</button>
     </div>
     <div style="position:relative">
       <canvas id="compareCanvas" style="display:none"></canvas>
@@ -222,6 +242,116 @@
 <div id="authModal" style="display:none"></div>
 <script>
 "use strict";
+// ---- 语言切换（中/英）----
+const I18N = {
+  zh: {
+    appTitle: "股票历史数据查询", queryLabel: "查询股票：", phStock: "名称或代码，如：601088 / 中国神华 / 600519",
+    btnSearch: "查询", noStock: "尚未查询股票", tabChart: "行情图表", tabFit: "模型拟合", tabFuture: "未来预测",
+    optKline: "日K线图（蜡烛图）", optKlineWeek: "周K线图", optKlineMonth: "月K线图", optMa5: "5日均线图",
+    optBoll: "布林带 BOLL 图", optVol: "成交量 VOL 图", optChange: "涨跌幅柱状图",
+    optMacd: "MACD 指标", optKdj: "KDJ 指标", optRsi: "RSI 指标",
+    btnAi: "✨ AI 解读", btnCmp: "⇄ 多股对比", btnShare: "📋 分享卡片",
+    fitTitle: "模型拟合结果", futureTitle: "未来10日预测",
+    cmpTitle: "多股归一化对比（以所选范围首日收盘 = 100）", cmpRange: "日期范围：",
+    cmpGo: "生成对比图", cmpClose: "关闭",
+    pleaseLogin: "请登录", loginFirst: "登录后查看自选股（实时行情随账号云端同步）",
+    wlEmpty: "自选股（查询候选旁点 ＋ 添加）", wlTsPrefix: "自选股实时行情 · ",
+    wlRefresh: "🔄 刷新", wlRefresh10s: "刷新(10s)", wlRefreshTick: "s",
+    wlHeadName: "名称", wlHeadPrice: "最新价", wlHeadChg: "涨跌幅", wlHeadPrev: "昨收",
+    wlHeadPe: "PE", wlHeadPb: "PB", wlHeadCap: "总市值", wlHeadChart: "图表",
+    wlLoading: "正在查询数据", wlStateDone: "已获取", wlStateLoading: "正在获取数据",
+    wlStateFail: "获取失败", wlStatePending: "待获取",
+    wlUpdated: "自选股实时行情 · 更新于 ", wlEvery30s: "每30秒统一刷新",
+    stSearchEmpty: "请输入股票名称或代码", stSearching: "搜索中...", stSearchFail: "搜索失败: ",
+    stNotFound: "未找到该股票", stCandidatesPre: "找到 ", stCandidates: " 个候选，点选一个（＋加入自选）：", stReqErr: "请求异常: ",
+    stQuoteFail: "实时行情获取失败，30 秒后自动重试", stQuoted: "行情已更新 ",
+    stDone: "完成", stLoginFirstAdd: "请先登录后再添加自选股", stAlreadyIn: "已在自选中",
+    stAdded: "已加入自选: ", stDownloading: "，正在下载数据...", stSynced: "已将本机 ", stSynced2: " 只自选股同步到账号 ",
+    stNetErr: "网络连接异常，正在重试...", stCacheHit: "已用今日缓存数据（无需重新下载）",
+    stFetching: " 数据中（约需 10~30 秒）...", stFetchFail: "下载失败: ", stTimeout: "请求异常或超时: ",
+    stTooFast: "刷新太频繁，请稍后再试", stRefreshing: "正在刷新行情...",
+    stNoDayCache: "暂无日K缓存，请先打开日K线图", stSelAtLeast: "请至少选择一支股票",
+    stCmpNeed2: "对比需要至少 2 支股票（所选日期范围内有数据）", stCmpNone: "暂无可对比的股票（先查询或加入自选股）",
+    stShareFirst: "请先查询股票再分享卡片", stShareOk: "卡片已导出为 PNG 图片文件",
+    stShareShot: "图表截图失败: ", stShareExport: "导出失败: ", stShareRead: "图表图片读取失败",
+    stZoomHint: "放大模式：滚轮缩放横轴，左键拖拽平移，单击锁定参考线，右上角 ✕ 关闭",
+    stLogout: "退出",
+    aiTitle: "AI 技术解读", aiRegen: "重新生成", aiRegenTip: "重新生成解读（覆盖缓存）", aiCloseTip: "关闭解读窗口",
+    aiWaiting: "正在进行AI技术解读，大约需要5-10s…", aiEmpty: "解读结果为空，请点击 🔄 重新生成",
+    todayPrefix: "今日 ", predRange: "预测区间", fitLegend: "图例（颜色对应上图拟合线）",
+    finalPred: "最终预测（RMSE 逆加权平均）", dailyPred: "逐日预测", queryFirst: "请先查询股票",
+    fitUnavailable: "模型拟合不可用（数据不足或拟合失败）", aiQueryFirst: "请先查询股票再使用 AI 解读",
+    tipDate: "日期", tipOpen: "开盘", tipHigh: "最高", tipLow: "最低", tipVol: "成交量",
+    tipChg: "涨跌幅", tipState: "状态", tipOverbought: "超买", tipOversold: "超卖", tipNeutral: "中性",
+    tipRealClose: "真实收盘(现价)", tipFinal: "最终(加权)", unitLot: "手",
+  },
+  en: {
+    appTitle: "Stock History Data Query", queryLabel: "Search stock:", phStock: "Name or code, e.g. 601088 / China Shenhua / 600519",
+    btnSearch: "Search", noStock: "No stock queried yet", tabChart: "Chart", tabFit: "Model Fit", tabFuture: "Forecast",
+    optKline: "Daily K-line (Candlestick)", optKlineWeek: "Weekly K-line", optKlineMonth: "Monthly K-line", optMa5: "MA5 Line",
+    optBoll: "BOLL Bands", optVol: "Volume VOL", optChange: "Change % Bar",
+    optMacd: "MACD", optKdj: "KDJ", optRsi: "RSI",
+    btnAi: "✨ AI Insight", btnCmp: "⇄ Compare", btnShare: "📋 Share Card",
+    fitTitle: "Model Fitting Results", futureTitle: "Next 10 Days Forecast",
+    cmpTitle: "Normalized Comparison (first-day close of range = 100)", cmpRange: "Date range:",
+    cmpGo: "Generate Chart", cmpClose: "Close",
+    pleaseLogin: "Please sign in", loginFirst: "Sign in to view watchlist (cloud synced)",
+    wlEmpty: "Watchlist (click ＋ next to candidates to add)", wlTsPrefix: "Watchlist quotes · ",
+    wlRefresh: "🔄 Refresh", wlRefresh10s: "Refresh(10s)", wlRefreshTick: "s",
+    wlHeadName: "Name", wlHeadPrice: "Price", wlHeadChg: "Chg %", wlHeadPrev: "Prev Close",
+    wlHeadPe: "PE", wlHeadPb: "PB", wlHeadCap: "Mkt Cap", wlHeadChart: "Chart",
+    wlLoading: "Loading...", wlStateDone: "Ready", wlStateLoading: "Fetching...",
+    wlStateFail: "Failed", wlStatePending: "Pending",
+    wlUpdated: "Watchlist quotes · updated ", wlEvery30s: "refreshes every 30s",
+    stSearchEmpty: "Please enter a stock name or code", stSearching: "Searching...", stSearchFail: "Search failed: ",
+    stNotFound: "Stock not found", stCandidates: " candidates, click one (＋ to add):", stReqErr: "Request error: ",
+    stQuoteFail: "Quote fetch failed, auto-retry in 30s", stQuoted: "Quotes updated ",
+    stDone: "Done", stLoginFirstAdd: "Please sign in before adding", stAlreadyIn: "Already in watchlist",
+    stAdded: "Added: ", stDownloading: ", downloading data...", stSynced: "Synced ", stSynced2: " stocks to account ",
+    stNetErr: "Network error, retrying...", stCacheHit: "Loaded from today's cache",
+    stFetching: " fetching data (10~30s)...", stFetchFail: "Download failed: ", stTimeout: "Request error or timeout: ",
+    stTooFast: "Too frequent, please wait", stRefreshing: "Refreshing quotes...",
+    stNoDayCache: "No daily cache, open daily K-line first", stSelAtLeast: "Select at least one stock",
+    stCmpNeed2: "Comparison needs at least 2 stocks (with data in range)", stCmpNone: "No stocks to compare (query or add first)",
+    stShareFirst: "Query a stock before sharing", stShareOk: "Card exported as PNG file",
+    stShareShot: "Snapshot failed: ", stShareExport: "Export failed: ", stShareRead: "Chart image read failed",
+    stZoomHint: "Zoom: wheel to scale X, drag to pan, double-click to pin, ✕ to close",
+    stLogout: "Sign out",
+    aiTitle: "AI Technical Insight", aiRegen: "Regenerate", aiRegenTip: "Regenerate insight (overwrite cache)", aiCloseTip: "Close insight panel",
+    aiWaiting: "AI insight in progress, about 5-10s…", aiEmpty: "Empty result, click 🔄 Regenerate",
+    todayPrefix: "Today ", predRange: "forecast range", fitLegend: "Legend (colors match lines above)",
+    finalPred: "Final Forecast (RMSE inverse-weighted)", dailyPred: "Daily Forecast", queryFirst: "Query a stock first",
+    fitUnavailable: "Model fit unavailable (insufficient data or fitting failed)", aiQueryFirst: "Query a stock before using AI insight",
+    tipDate: "Date", tipOpen: "Open", tipHigh: "High", tipLow: "Low", tipVol: "Volume",
+    tipChg: "Change %", tipState: "State", tipOverbought: "Overbought", tipOversold: "Oversold", tipNeutral: "Neutral",
+    tipRealClose: "Last Close", tipFinal: "Final (weighted)", unitLot: "lots",
+  }
+};
+let _lang = "zh";
+try { _lang = localStorage.getItem("sf_lang") || "zh"; } catch (e) { _lang = "zh"; }
+function t(key) { return (I18N[_lang] && I18N[_lang][key]) || key; }
+function applyLang() {
+  document.querySelectorAll("[data-i18n]").forEach(el => {
+    el.textContent = t(el.dataset.i18n);
+  });
+  document.querySelectorAll("[data-i18n-ph]").forEach(el => {
+    el.placeholder = t(el.dataset.i18nPh);
+  });
+  document.querySelectorAll(".lang-item").forEach(el => {
+    el.classList.toggle("active", el.dataset.lang === _lang);
+  });
+}
+document.querySelectorAll(".lang-item").forEach(el => {
+  el.addEventListener("click", () => {
+    if (el.dataset.lang !== _lang) {
+      _lang = el.dataset.lang;
+      try { localStorage.setItem("sf_lang", _lang); } catch (e) {}
+      location.reload();  // 功能页动态文案多，刷新重渲染最可靠
+    }
+  });
+});
+applyLang();
+
 const UP = "#e03434", DOWN = "#089981";
 const W = 1140, H = 620, PAD = {L:64, R:20, T:24, B:42};
 
@@ -565,16 +695,16 @@ function drawFit() {
 
 function renderFitPanel() {
   const body = document.getElementById("fitBody");
-  if (!D || !n) { body.innerHTML = "<div style='color:#bbb'>请先查询股票</div>"; return; }
+  if (!D || !n) { body.innerHTML = "<div style='color:#bbb'>" + t("queryFirst") + "</div>"; return; }
   if (!D.fit || !Object.keys(D.fit).length) {
-    body.innerHTML = "<div style='color:#999'>模型拟合不可用（数据不足或拟合失败）</div>";
+    body.innerHTML = "<div style='color:#999'>" + t("fitUnavailable") + "</div>";
     return;
   }
   const order = [["arima", "ARIMA 拟合"], ["ets", "ETS 指数平滑"],
                  ["prophet", "Prophet 拟合"], ["svr", "SVR 拟合"],
                  ["rf", "随机森林拟合"]];
   // 图例：颜色对应上图各拟合线
-  let html = "<div class='f-pred-title'>图例（颜色对应上图拟合线）</div>";
+  let html = "<div class='f-pred-title'>" + t("fitLegend") + "</div>";
   html += "<div class='f-row'><span class='f-name'><span class='swatch' style='background:#111827'></span>真实收盘</span></div>";
   for (const [k, title] of order) {
     const m = D.fit[k];
@@ -619,12 +749,12 @@ function drawFuture() {
 
   // 大标题（醒目）+ 副标题（今日与预测区间）
   fctx.fillStyle = "#111827"; fctx.font = "bold 20px sans-serif"; fctx.textAlign = "center";
-  fctx.fillText("未来 10 日预测", W / 2, 26);
+  fctx.fillText(t("futureTitle"), W / 2, 26);
   const todayStr = new Date().toISOString().slice(0, 10);
   const p0 = dates[0] || "D+1";
   const p9 = dates[dates.length-1] || "D+10";
   fctx.font = "13px sans-serif"; fctx.fillStyle = "#888";
-  fctx.fillText("今日 " + todayStr + " ｜ 预测区间 " + p0 + " ~ " + p9, W / 2, 44);
+  fctx.fillText(t("todayPrefix") + todayStr + " ｜ " + t("predRange") + " " + p0 + " ~ " + p9, W / 2, 44);
 
   // y 范围：现价 + 所有预测（纵轴保持全局，不随可见范围重算）
   let lo = lastClose, hi = lastClose;
@@ -818,14 +948,14 @@ function weightedPredict() {
 
 function renderFuturePanel() {
   const body = document.getElementById("futureBody");
-  if (!D || !n) { body.innerHTML = "<div style='color:#bbb'>请先查询股票</div>"; return; }
+  if (!D || !n) { body.innerHTML = "<div style='color:#bbb'>" + t("queryFirst") + "</div>"; return; }
   if (!D.fit || !D.fit.arima || !D.fit.arima.predict) {
-    body.innerHTML = "<div style='color:#999'>模型拟合不可用（数据不足或拟合失败）</div>";
+    body.innerHTML = "<div style='color:#999'>" + t("fitUnavailable") + "</div>";
     return;
   }
   const lastClose = D.closes[D.closes.length-1];
   // 图例：色块 + 模型名（同模型拟合板块样式），颜色对应上图预测线
-  let html = "<div class='f-pred-title'>图例（颜色对应上图预测线）</div>";
+  let html = "<div class='f-pred-title'>" + t("fitLegend") + "</div>";
   html += "<div class='f-row'><span class='f-name'><span style='display:inline-block;width:18px;height:0;border-top:3px dashed #111827;vertical-align:middle'></span>真实收盘（现价 "+lastClose.toFixed(2)+"，虚线）</span></div>";
   const models = [["arima", "ARIMA 预测", "#dc2626"],
                   ["ets", "ETS 指数平滑预测", "#16a34a"],
@@ -845,9 +975,9 @@ function renderFuturePanel() {
   const chg = ((lastPred - lastClose) / lastClose * 100).toFixed(2);
   const p0 = D.fit.arima.predict_dates[0] || "D+1";
   const p9 = D.fit.arima.predict_dates[D.fit.arima.predict_dates.length-1] || "D+10";
-  html += "<div class='f-pred-title'>最终预测（RMSE 逆加权平均）</div>";
+  html += "<div class='f-pred-title'>" + t("finalPred") + "</div>";
   html += "<div class='f-final' style='color:"+(up?UP:DOWN)+"'>"+(up?"上涨 ↑":"下跌 ↓")+" ｜ 10日后 "+lastPred.toFixed(2)+"（"+chg+"%）</div>";
-  html += "<div class='f-pred-title'>逐日预测（"+p0.slice(5)+" ~ "+p9.slice(5)+"）</div>";
+  html += "<div class='f-pred-title'>" + t("dailyPred") + "（"+p0.slice(5)+" ~ "+p9.slice(5)+"）</div>";
   for (let i = 0; i < wp.length; i++) {
     const dt = D.fit.arima.predict_dates[i] ? D.fit.arima.predict_dates[i].slice(5) : ("D+"+(i+1));
     const dv = ((wp[i] - lastClose) / lastClose * 100);
@@ -918,12 +1048,12 @@ function tipContentFor(view, i) {
     const rV = D.fit && D.fit.rf ? D.fit.rf.values[i] : null;
     const row = (l, v, col) => "<div class='ft-row'><span class='lbl'>"+(col?'<i style="color:'+col+'">■</i> ':'')+l+"</span><span class='val'>"+v+"</span></div>";
     let h = "<div class='ft-date'>"+D.dates[i]+"</div>";
-    h += row("真实收盘", fmt(D.closes[i]));
-    h += row("ARIMA 拟合", aV!=null?fmt(aV):"—", "#dc2626");
-    h += row("ETS 拟合", eV!=null?fmt(eV):"—", "#16a34a");
-    h += row("Prophet 拟合", pV!=null?fmt(pV):"—", "#f59e0b");
-    h += row("SVR 拟合", sV!=null?fmt(sV):"—", "#8b5cf6");
-    h += row("随机森林拟合", rV!=null?fmt(rV):"—", "#06b6d4");
+    h += row(t("tipRealClose"), fmt(D.closes[i]));
+    h += row("ARIMA", aV!=null?fmt(aV):"—", "#dc2626");
+    h += row("ETS", eV!=null?fmt(eV):"—", "#16a34a");
+    h += row("Prophet", pV!=null?fmt(pV):"—", "#f59e0b");
+    h += row("SVR", sV!=null?fmt(sV):"—", "#8b5cf6");
+    h += row("RF", rV!=null?fmt(rV):"—", "#06b6d4");
     return h;
   }
   if (view === "future") {
@@ -934,13 +1064,13 @@ function tipContentFor(view, i) {
                     ["ETS", D.fit.ets ? D.fit.ets.predict[i] : null, "#16a34a"],
                     ["Prophet", D.fit.prophet ? D.fit.prophet.predict[i] : null, "#f59e0b"],
                     ["SVR", D.fit.svr ? D.fit.svr.predict[i] : null, "#8b5cf6"],
-                    ["随机森林", D.fit.rf ? D.fit.rf.predict[i] : null, "#06b6d4"]];
+                    ["RF", D.fit.rf ? D.fit.rf.predict[i] : null, "#06b6d4"]];
     let h = "<div class='ft-date'>"+dt+"</div>";
-    h += "<div class='ft-row'><span class='lbl'>真实收盘(现价)</span><span class='val'>"+lastClose.toFixed(2)+"</span></div>";
+    h += "<div class='ft-row'><span class='lbl'>" + t("tipRealClose") + "</span><span class='val'>"+lastClose.toFixed(2)+"</span></div>";
     for (const [nm, v, col] of models) {
       h += "<div class='ft-row'><span class='lbl'><i style='color:"+col+";font-style:normal'>■</i> "+nm+"</span><span class='val'>"+(v!=null?v.toFixed(2):"—")+"</span></div>";
     }
-    h += "<div class='ft-row'><span class='lbl'><i style='color:#111827;font-style:normal'>■</i> 最终(加权)</span><span class='val'>"+(wp[i]!=null?wp[i].toFixed(2):"—")+"</span></div>";
+    h += "<div class='ft-row'><span class='lbl'><i style='color:#111827;font-style:normal'>■</i> " + t("tipFinal") + "</span><span class='val'>"+(wp[i]!=null?wp[i].toFixed(2):"—")+"</span></div>";
     return h;
   }
   // chart
@@ -949,31 +1079,31 @@ function tipContentFor(view, i) {
   const row2 = (l, v) => "<div class='r'><span class='lbl'>"+l+"</span><span class='val'>"+v+"</span></div>";
   if (currentType === "macd") {
     const v = x => x != null ? x.toFixed(3) : "—";
-    return row2("日期", "<b>"+D.dates[i]+"</b>") +
+    return row2(t("tipDate"), "<b>"+D.dates[i]+"</b>") +
       row2("DIF", v(D.macd_dif && D.macd_dif[i])) +
       row2("DEA", v(D.macd_dea && D.macd_dea[i])) +
-      row2("MACD柱", v(D.macd_hist && D.macd_hist[i]));
+      row2("MACD", v(D.macd_hist && D.macd_hist[i]));
   }
   if (currentType === "kdj") {
     const v = x => x != null ? x.toFixed(2) : "—";
-    return row2("日期", "<b>"+D.dates[i]+"</b>") +
+    return row2(t("tipDate"), "<b>"+D.dates[i]+"</b>") +
       row2("K", v(D.kdj_k && D.kdj_k[i])) +
       row2("D", v(D.kdj_d && D.kdj_d[i])) +
       row2("J", v(D.kdj_j && D.kdj_j[i]));
   }
   if (currentType === "rsi") {
     const v = x => x != null ? x.toFixed(2) : "—";
-    return row2("日期", "<b>"+D.dates[i]+"</b>") +
+    return row2(t("tipDate"), "<b>"+D.dates[i]+"</b>") +
       row2("RSI(14)", v(D.rsi && D.rsi[i])) +
-      row2("状态", D.rsi && D.rsi[i] != null ? (D.rsi[i] >= 70 ? "超买" : D.rsi[i] <= 30 ? "超卖" : "中性") : "—");
+      row2(t("tipState"), D.rsi && D.rsi[i] != null ? (D.rsi[i] >= 70 ? t("tipOverbought") : D.rsi[i] <= 30 ? t("tipOversold") : t("tipNeutral")) : "—");
   }
-  return row2("日期", "<b>"+D.dates[i]+"</b>") +
-    row2("开盘", fmt(D.opens[i])) +
+  return row2(t("tipDate"), "<b>"+D.dates[i]+"</b>") +
+    row2(t("tipOpen"), fmt(D.opens[i])) +
     row2("收盘", fmt(D.closes[i])) +
-    row2("最高", fmt(D.highs[i])) +
-    row2("最低", fmt(D.lows[i])) +
-    row2("成交量", fmt(D.vols[i],0)+" 手") +
-    row2("涨跌幅", "<span class='"+cls+"'>"+fmt(ch)+"%</span>") +
+    row2(t("tipHigh"), fmt(D.highs[i])) +
+    row2(t("tipLow"), fmt(D.lows[i])) +
+    row2(t("tipVol"), fmt(D.vols[i],0)+" " + t("unitLot")) +
+    row2(t("tipChg"), "<span class='"+cls+"'>"+fmt(ch)+"%</span>") +
     row2("MA5", fmt(D.ma5[i])) +
     row2("BOLL上", fmt(D.boll_up[i])) +
     row2("BOLL中", fmt(D.boll_mid[i])) +
@@ -1140,7 +1270,7 @@ function enterZoom() {
   _pinTipManual = null;  // 进入放大清除手动位置
   document.getElementById("zoomOverlay").style.display = "flex";
   drawZoomCanvas();
-  setStatus("放大模式：滚轮缩放横轴，左键拖拽平移，单击锁定参考线，右上角 ✕ 关闭");
+  setStatus(t("stZoomHint"));
 }
 
 function exitZoom() {
@@ -1429,25 +1559,25 @@ function setStatus(msg) { document.getElementById("status").textContent = msg; }
 
 async function doSearch() {
   const q = document.getElementById("stockInput").value.trim();
-  if (!q) { setStatus("请输入股票名称或代码"); return; }
+  if (!q) { setStatus(t("stSearchEmpty")); return; }
   const box = document.getElementById("candidateBox");
   box.innerHTML = "";
   const btn = document.getElementById("searchBtn");
   btn.disabled = true;
-  setStatus("搜索中...");
+  setStatus(t("stSearching"));
   try {
     const resp = await fetch("/api/search?q=" + encodeURIComponent(q));
     const data = await resp.json();
-    if (data.error) { setStatus("搜索失败: " + data.error); return; }
-    if (!data.length) { setStatus("未找到该股票"); return; }
+    if (data.error) { setStatus(t("stSearchFail") + data.error); return; }
+    if (!data.length) { setStatus(t("stNotFound")); return; }
     box.innerHTML = data.map((c, i) =>
       "<button class='cand' data-i='" + i + "'>" + c["名称"] + " " + c["代码"] + " " + c["市场"] + "</button>" +
       "<button class='wl-add' data-i='" + i + "' title='加入自选'>＋</button>"
     ).join("");
     window._cands = data;
-    setStatus("找到 " + data.length + " 个候选，点选一个（＋加入自选）：");
+    setStatus(t("stCandidatesPre") + data.length + t("stCandidates"));
   } catch (e) {
-    setStatus("请求异常: " + e);
+    setStatus(t("stReqErr") + e);
   } finally {
     btn.disabled = false;
   }
@@ -1492,10 +1622,10 @@ function updateWatchStateRow(secid) {
   const el = row.querySelector(".wl-state");
   if (!el) return;
   const st = _watchChartState[secid];
-  if (st === "done") { el.textContent = "已获取"; el.style.color = "#16a34a"; }
-  else if (st === "loading") { el.textContent = "正在获取数据"; el.style.color = "#d97706"; }
-  else if (st === "fail") { el.textContent = "获取失败"; el.style.color = "#dc2626"; }
-  else if (st === "pending") { el.textContent = "待获取"; el.style.color = "#9ca3af"; }
+  if (st === "done") { el.textContent = t("wlStateDone"); el.style.color = "#16a34a"; }
+  else if (st === "loading") { el.textContent = t("wlStateLoading"); el.style.color = "#d97706"; }
+  else if (st === "fail") { el.textContent = t("wlStateFail"); el.style.color = "#dc2626"; }
+  else if (st === "pending") { el.textContent = t("wlStatePending"); el.style.color = "#9ca3af"; }
   else { el.textContent = ""; }
 }
 
@@ -1554,7 +1684,7 @@ async function refreshAllQuotes() {
     const resp = await fetch("/api/quotes?secids=" + encodeURIComponent(secids.join(",")));
     const list = await resp.json();
     if (!Array.isArray(list)) {
-      setStatus("实时行情获取失败，30 秒后自动重试");
+      setStatus(t("stQuoteFail"));
       return;
     }
     const map = {};
@@ -1563,10 +1693,10 @@ async function refreshAllQuotes() {
     _lastQuoteTs = Date.now();
     renderWatchQuotes(map);
     const ts = document.getElementById("wlTs");
-    if (ts) ts.textContent = "自选股实时行情 · 更新于 " + fmtTime(_lastQuoteTs);
-    setStatus("行情已更新 " + fmtTime(_lastQuoteTs));
+    if (ts) ts.textContent = t("wlUpdated") + fmtTime(_lastQuoteTs);
+    setStatus(t("stQuoted") + fmtTime(_lastQuoteTs));
   } catch (e) {
-    setStatus("实时行情获取失败，30 秒后自动重试");
+    setStatus(t("stQuoteFail"));
   }
 }
 
@@ -1591,7 +1721,7 @@ function setChartData(data, name, secid) {
   document.getElementById("rangeInfo").textContent =
     (_curName || name || "") + " | " + D.dates[0] + " ~ " + D.dates[n-1] + " | 共 " + n + " 个交易日";
   // 注意：不清空 candidateBox——候选选项在加入自选股/重新搜索前保持显示，避免闪烁消失
-  setStatus("完成");
+  setStatus(t("stDone"));
   // 按当前视图完整重绘：仅 paint 只更新行情图，模型拟合/未来预测视图的
   // 画布与右侧面板都需同步重渲染（否则点击自选股切换时图和数据不更新）
   window._pin = null;  // 切换股票后旧固定参考线失效，清除
@@ -1627,26 +1757,26 @@ function saveWatch() { try { localStorage.setItem("wl", JSON.stringify(_watch));
 function renderWatchlist() {
   const bar = document.getElementById("watchlist");
   // 未登录时不显示本地自选股缓存（用户数据属于登录用户，未登录只提示登录）
-  if (!_token) { bar.innerHTML = "<div class='wl-empty'>登录后查看自选股（实时行情随账号云端同步）</div>"; return; }
-  if (!_watch.length) { bar.innerHTML = "<div class='wl-empty'>自选股（查询候选旁点 ＋ 添加）</div>"; return; }
-  bar.innerHTML = "<div class='wl-head' style='display:flex;align-items:center;gap:8px'><span id='wlTs'>自选股实时行情 · " + (_lastQuoteTs ? "更新于 " + fmtTime(_lastQuoteTs) : "每30秒统一刷新") + "</span>" +
+  if (!_token) { bar.innerHTML = "<div class='wl-empty'>" + t("loginFirst") + "</div>"; return; }
+  if (!_watch.length) { bar.innerHTML = "<div class='wl-empty'>" + t("wlEmpty") + "</div>"; return; }
+  bar.innerHTML = "<div class='wl-head' style='display:flex;align-items:center;gap:8px'><span id='wlTs'>" + t("wlUpdated") + (_lastQuoteTs ? fmtTime(_lastQuoteTs) : t("wlEvery30s")) + "</span>" +
     "<button id='wlRefreshBtn' style='margin-left:auto;padding:2px 10px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;font-size:12px;color:#4b5563' " +
     (Date.now() - _lastManualRefresh < 10000 ? "disabled" : "") + ">" +
-    (Date.now() - _lastManualRefresh < 10000 ? "刷新(10s)" : "🔄 刷新") + "</button></div>" +
+    (Date.now() - _lastManualRefresh < 10000 ? t("wlRefresh10s") : t("wlRefresh")) + "</button></div>" +
     "<div class='wl-row wl-head-row'>" +
-      "<span class='wl-name'>名称</span>" +
-      "<span class='wl-price'>最新价</span>" +
-      "<span class='wl-chg'>涨跌幅</span>" +
-      "<span class='wl-prev'>昨收</span>" +
-      "<span class='wl-pe'>PE</span>" +
-      "<span class='wl-pb'>PB</span>" +
-      "<span class='wl-cap'>总市值</span>" +
-      "<span class='wl-state'>图表</span>" +
+      "<span class='wl-name'>" + t("wlHeadName") + "</span>" +
+      "<span class='wl-price'>" + t("wlHeadPrice") + "</span>" +
+      "<span class='wl-chg'>" + t("wlHeadChg") + "</span>" +
+      "<span class='wl-prev'>" + t("wlHeadPrev") + "</span>" +
+      "<span class='wl-pe'>" + t("wlHeadPe") + "</span>" +
+      "<span class='wl-pb'>" + t("wlHeadPb") + "</span>" +
+      "<span class='wl-cap'>" + t("wlHeadCap") + "</span>" +
+      "<span class='wl-state'>" + t("wlHeadChart") + "</span>" +
       "<span class='wl-x'></span>" +
     "</div>" + _watch.map(w =>
     "<div class='wl-row' data-secid='"+w.secid+"'>" +
       "<span class='wl-name'>"+w.name+" <b>"+(w.code || (w.secid||"").split(".")[1] || "")+"</b></span>" +
-      "<span class='wl-price' style='color:#999'>正在查询数据</span>" +
+      "<span class='wl-price' style='color:#999'>" + t("wlLoading") + "</span>" +
       "<span class='wl-chg'></span>" +
       "<span class='wl-prev'></span>" +
       "<span class='wl-pe'></span>" +
@@ -1685,12 +1815,12 @@ function renderWatchQuotes(map) {
   }
 }
 function addWatch(secid, name, code) {
-  if (!_token) { setStatus("请先登录后再添加自选股"); location.href = "/"; return; }
-  if (_watch.some(w => w.secid === secid)) { setStatus("已在自选中"); return; }
+  if (!_token) { setStatus(t("stLoginFirstAdd")); location.href = "/"; return; }
+  if (_watch.some(w => w.secid === secid)) { setStatus(t("stAlreadyIn")); return; }
   _watch.push({secid: secid, name: name, code: code});
   saveWatch(); renderWatchlist();
   refreshAllQuotes();
-  setStatus("已加入自选: " + name + "，正在下载数据...");
+  setStatus(t("stAdded") + name + t("stDownloading"));
   cloudPost("/api/watchlist", {action: "add", secid: secid, name: name});
   // 加入自选后自动下载该股K线并打开图表（命中缓存秒开），无需再点候选
   doKlineSecid(secid, name);
@@ -1762,7 +1892,7 @@ async function loadWatchFromCloud() {
           for (const w of _watch) {
             cloudPost("/api/watchlist", {action: "add", secid: w.secid, name: w.name || w.secid});
           }
-          setStatus("已将本机 " + _watch.length + " 只自选股同步到账号 " + _username);
+          setStatus(t("stSynced") + _watch.length + t("stSynced2") + _username);
         }
       }
       saveWatch(); renderWatchlist(); refreshAllQuotes();
@@ -1771,7 +1901,7 @@ async function loadWatchFromCloud() {
     }
   } else if (me && me.__netError) {
     // 网络错误（非未登录）：不跳转，避免与登录页反复切换闪烁；稍后由定时器重试
-    setStatus("网络连接异常，正在重试...");
+    setStatus(t("stNetErr"));
   } else {
     // 真正未登录（401 已由 handleAuthFail 处理跳转；这里兜底）
     if (_token) { _token = ""; _username = ""; try { localStorage.removeItem("sf_token"); localStorage.removeItem("sf_user"); } catch (e) {} }
@@ -1785,7 +1915,7 @@ function renderAuthArea() {
   const area = document.getElementById("authArea");
   if (_username) {
     area.innerHTML = "<span style='color:#4b5563'>👤 " + _username + "</span> " +
-      "<button id='logoutBtn' style='padding:3px 10px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;margin-left:6px'>退出</button>";
+      "<button id='logoutBtn' style='padding:3px 10px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;margin-left:6px'>" + t("stLogout") + "</button>";
     document.getElementById("logoutBtn").addEventListener("click", () => {
       cloudPost("/api/logout", {});
       _token = ""; _username = "";
@@ -1800,7 +1930,7 @@ function renderAuthArea() {
       location.href = "/";
     });
   } else {
-    area.innerHTML = "<span style='color:#9ca3af'>请登录</span>";
+    area.innerHTML = "<span style='color:#9ca3af'>" + t("pleaseLogin") + "</span>";
   }
 }
 
@@ -1841,23 +1971,23 @@ async function doKline(idx) {
   const cached = getKlineCache(c.secid, period);
   if (cached) {
     setChartData(cached, c["名称"], c.secid);
-    setStatus("已用今日缓存数据（无需重新下载）");
+    setStatus(t("stCacheHit"));
     return;
   }
   const s = document.getElementById("startDate").value;
   const e = document.getElementById("endDate").value;
-  setStatus("下载 " + c["名称"] + " 数据中（约需 10~30 秒）...");
+  setStatus(c["名称"] + t("stFetching"));
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 90000);
   try {
     const resp = await fetch("/api/kline?secid=" + encodeURIComponent(c.secid) +
                              "&start=" + s + "&end=" + e + "&period=" + period, {signal: ctrl.signal});
     const data = await resp.json();
-    if (data.error) { setStatus("下载失败: " + data.error); return; }
+    if (data.error) { setStatus(t("stFetchFail") + data.error); return; }
     setKlineCache(c.secid, data, period);
     setChartData(data, c["名称"], c.secid);
   } catch (err) {
-    setStatus("请求异常或超时: " + err);
+    setStatus(t("stTimeout") + err);
   } finally {
     clearTimeout(timer);
   }
@@ -1924,7 +2054,7 @@ async function doKlineSecid(secid, name, period) {
   }
   const s = document.getElementById("startDate").value;
   const e = document.getElementById("endDate").value;
-  setStatus("下载 " + name + " " + periodLabel + " 数据中（约需 10~30 秒）...");
+  setStatus(name + " " + periodLabel + t("stFetching"));
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 90000);
   try {
@@ -1940,7 +2070,7 @@ async function doKlineSecid(secid, name, period) {
         setChartData(agg, name, secid);
         setStatus(name + " " + periodLabel + "（日K聚合兜底）");
       } else {
-        setStatus("下载失败: " + data.error);
+        setStatus(t("stFetchFail") + data.error);
       }
       return;
     }
@@ -1954,7 +2084,7 @@ async function doKlineSecid(secid, name, period) {
       setChartData(agg, name, secid);
       setStatus(name + " " + periodLabel + "（日K聚合兜底）");
     } else {
-      setStatus("请求异常或超时: " + err);
+      setStatus(t("stTimeout") + err);
     }
   } finally {
     clearTimeout(timer);
@@ -1975,22 +2105,22 @@ document.getElementById("watchlist").addEventListener("click", e => {
   const rBtn = e.target.closest("#wlRefreshBtn");
   if (rBtn) {
     const now = Date.now();
-    if (now - _lastManualRefresh < 10000) { setStatus("刷新太频繁，请稍后再试"); return; }
+    if (now - _lastManualRefresh < 10000) { setStatus(t("stTooFast")); return; }
     _lastManualRefresh = now;
     rBtn.disabled = true;
-    setStatus("正在刷新行情...");
+    setStatus(t("stRefreshing"));
     refreshAllQuotes();
     // 按钮倒计时：10s 逐秒递减，归零后恢复
     let remain = 10;
-    rBtn.textContent = remain + "s";
+    rBtn.textContent = remain + t("wlRefreshTick");
     const iv = setInterval(() => {
       remain--;
       const b = document.getElementById("wlRefreshBtn");
       if (remain <= 0) {
         clearInterval(iv);
-        if (b) { b.disabled = false; b.textContent = "🔄 刷新"; }
+        if (b) { b.disabled = false; b.textContent = t("wlRefresh"); }
       } else if (b) {
-        b.textContent = remain + "s";
+        b.textContent = remain + t("wlRefreshTick");
       }
     }, 1000);
     return;
@@ -2040,16 +2170,16 @@ function switchPeriodData(period) {
     setChartData(agg, _curName, secid);
     setStatus(_curName + " " + label + "（前端聚合，零等待）");
   } else {
-    setStatus("暂无日K缓存，请先打开日K线图");
+    setStatus(t("stNoDayCache"));
     paint("kline");
   }
 }
 // AI 标题（含"重新生成"与"关闭"按钮，点击强制重新请求覆盖缓存 / 关闭面板）
 function aiTitleHtml() {
-  return "<div class='ai-title' style='display:flex;align-items:center;gap:8px'>✨ AI 技术解读 · " + (_curName || "") +
+  return "<div class='ai-title' style='display:flex;align-items:center;gap:8px'>✨ " + t("aiTitle") + " · " + (_curName || "") +
          "<span style='margin-left:auto;display:flex;gap:6px'>" +
-         "<button class='ai-regen' style='padding:2px 8px;border:1px solid #d1d5db;border-radius:5px;background:#fff;cursor:pointer;font-size:12px;color:#6b7280' title='重新生成解读（覆盖缓存）'>🔄 重新生成</button>" +
-         "<button class='ai-close' style='padding:2px 8px;border:1px solid #d1d5db;border-radius:5px;background:#fff;cursor:pointer;font-size:12px;color:#6b7280' title='关闭解读窗口'>✕</button>" +
+         "<button class='ai-regen' style='padding:2px 8px;border:1px solid #d1d5db;border-radius:5px;background:#fff;cursor:pointer;font-size:12px;color:#6b7280' title='" + t("aiRegenTip") + "'>🔄 " + t("aiRegen") + "</button>" +
+         "<button class='ai-close' style='padding:2px 8px;border:1px solid #d1d5db;border-radius:5px;background:#fff;cursor:pointer;font-size:12px;color:#6b7280' title='" + t("aiCloseTip") + "'>✕</button>" +
          "</span></div>";
 }
 
@@ -2076,7 +2206,7 @@ async function requestAiInsight(force) {
       return;
     }
   }
-  panel.innerHTML = aiTitleHtml() + "<div style='color:#9ca3af'>正在进行AI技术解读，大约需要5-10s…</div>";
+  panel.innerHTML = aiTitleHtml() + "<div style='color:#9ca3af'>" + t("aiWaiting") + "</div>";
   const recent = [];
   const start = Math.max(0, n - 20);
   for (let i = start; i < n; i++) {
@@ -2095,7 +2225,7 @@ async function requestAiInsight(force) {
     else {
       const t = (data.text || "").trim();
       if (!t) {
-        panel.innerHTML = aiTitleHtml() + "<div style='color:#c0392b'>解读结果为空，请点击 🔄 重新生成</div>";
+        panel.innerHTML = aiTitleHtml() + "<div style='color:#c0392b'>" + t("aiEmpty") + "</div>";
         return;
       }
       _aiCache[ck] = {text: t, ts: todayStr()};  // 保存解读（覆盖当天记录，不新增），之后查看不再重复请求
@@ -2134,7 +2264,7 @@ document.getElementById("aiBtn").addEventListener("click", () => {
   _aiPanelOpen = true;
   panel.style.display = "block";
   if (!D || !n) {
-    panel.innerHTML = "<div class='ai-title'>✨ AI 技术解读</div><div style='color:#9ca3af'>请先查询股票再使用 AI 解读</div>";
+    panel.innerHTML = "<div class='ai-title'>✨ " + t("aiTitle") + "</div><div style='color:#9ca3af'>" + t("aiQueryFirst") + "</div>";
     return;
   }
   requestAiInsight();
@@ -2191,7 +2321,7 @@ function showCmpTipAt(xi, tipX, tipY, tipEl) {
 
 function drawCompare() {
   const sel = [...document.querySelectorAll("#cmpList input:checked")].map(i => i.value);
-  if (!sel.length) { setStatus("请至少选择一支股票"); return; }
+  if (!sel.length) { setStatus(t("stSelAtLeast")); return; }
   const from = document.getElementById("cmpFrom").value;
   const to = document.getElementById("cmpTo").value;
   // 日期范围过滤（默认最近 30 天，不超数据本身范围）
@@ -2204,7 +2334,7 @@ function drawCompare() {
     if (i1 < i0) return null;
     return {name: d.name || secid, closes: d.closes.slice(i0, i1 + 1), dates: d.dates.slice(i0, i1 + 1)};
   }).filter(Boolean);
-  if (items.length < 2) { setStatus("对比需要至少 2 支股票（所选日期范围内有数据）"); return; }
+  if (items.length < 2) { setStatus(t("stCmpNeed2")); return; }
   const cv = document.getElementById("compareCanvas");
   cv.style.display = "block";
   // 尺寸首次确定后固定：mousemove 重绘不重设 canvas 尺寸，避免滚动条出现/消失
@@ -2431,7 +2561,7 @@ document.getElementById("cmpTip").addEventListener("mousedown", e => {
 
 document.getElementById("cmpBtn").addEventListener("click", () => {
   const list = cmpCandidates();
-  if (!list.length) { setStatus("暂无可对比的股票（先查询或加入自选股）"); return; }
+  if (!list.length) { setStatus(t("stCmpNone")); return; }
   // 默认日期范围：各股票数据并集范围，默认取最近 30 天
   let minD = null, maxD = null;
   for (const c of list) {
@@ -2487,10 +2617,10 @@ document.getElementById("compareOverlay").addEventListener("click", e => {
 });
 // ---- 行情卡片分享（导出 PNG 图片文件） ----
 document.getElementById("shareBtn").addEventListener("click", () => {
-  if (!D || !n) { setStatus("请先查询股票再分享卡片"); return; }
+  if (!D || !n) { setStatus(t("stShareFirst")); return; }
   const last = n - 1;
   let chartDataUrl;
-  try { chartDataUrl = cv.toDataURL("image/png"); } catch (e) { setStatus("图表截图失败: " + e); return; }
+  try { chartDataUrl = cv.toDataURL("image/png"); } catch (e) { setStatus(t("stShareShot") + e); return; }
   const v = x => x != null ? fmt(x) : "—";
   const rows = [
     ["最新收盘", v(D.closes[last])],
@@ -2567,10 +2697,10 @@ document.getElementById("shareBtn").addEventListener("click", () => {
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        setStatus("卡片已导出为 PNG 图片文件");
-      } catch (e2) { setStatus("导出失败: " + e2); }
+        setStatus(t("stShareOk"));
+      } catch (e2) { setStatus(t("stShareExport") + e2); }
     };
-    img.onerror = () => setStatus("图表图片读取失败");
+    img.onerror = () => setStatus(t("stShareRead"));
     img.src = chartDataUrl;
   };
   draw();
