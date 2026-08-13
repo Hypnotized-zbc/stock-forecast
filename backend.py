@@ -1380,7 +1380,8 @@ def verify_password(password, password_hash, salt):
 
 
 def _auth_user(headers):
-    """从 Authorization: Bearer *** 解析用户。返回 (user_id, username) 或 (None, None)。"""
+    """从 Authorization: Bearer *** 解析用户。返回 (user_id, username) 或 (None, None)。
+    会话持久化：内存 miss 时回退查询 SQLite sessions 表（服务重启后仍保持登录）。"""
     auth = headers.get("Authorization", "")
     if auth.startswith("Bearer "):
         token = auth[7:].strip()
@@ -1393,6 +1394,16 @@ def _auth_user(headers):
                     return uid, u["username"]
             else:
                 _SESSIONS.pop(token, None)  # 过期会话清理
+        else:
+            # 内存 miss → 查持久化会话（重启恢复）
+            rec = db.session_get(token)
+            if rec and rec["expire_ts"] >= time.time():
+                _SESSIONS[token] = (rec["user_id"], rec["expire_ts"])
+                u = db.user_get(rec["user_id"])
+                if u:
+                    return rec["user_id"], u["username"]
+            elif rec:
+                db.session_delete(token)  # 过期会话清库
     return None, None
 
 
@@ -1512,6 +1523,12 @@ class Handler(BaseHTTPRequestHandler):
                     e = datetime.strptime(end, "%Y-%m-%d")
                 except ValueError:
                     self._send_json({"error": "日期格式错误，应为 YYYY-MM-DD"}, 400)
+                    return
+                if s > e:
+                    self._send_json({"error": "开始日期不能晚于结束日期"}, 400)
+                    return
+                if e > datetime.now():
+                    self._send_json({"error": "结束日期不能晚于今天"}, 400)
                     return
                 name, rows = fetch_kline(secid, s, e, period)
                 if not rows:
@@ -1714,9 +1731,11 @@ class Handler(BaseHTTPRequestHandler):
                     print(f"[register] 创建用户失败: {exc}")
                     self._send_json({"error": "服务器错误，请稍后重试"}, 500)
                     return
-                # 注册即登录
+                # 注册即登录（token 同时落库，重启后仍保持登录）
                 token = secrets.token_hex(24)
-                _SESSIONS[token] = (uid_new, time.time() + _SESSION_TTL)
+                exp = time.time() + _SESSION_TTL
+                _SESSIONS[token] = (uid_new, exp)
+                db.session_set(token, uid_new, exp)
                 self._send_json({"ok": True, "token": token, "user_id": uid_new, "username": username})
             elif path == "/api/login":
                 ip = _client_ip(self)
@@ -1739,12 +1758,15 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 _rate_clear(ip)
                 token = secrets.token_hex(24)
-                _SESSIONS[token] = (u["user_id"], time.time() + _SESSION_TTL)
+                exp = time.time() + _SESSION_TTL
+                _SESSIONS[token] = (u["user_id"], exp)
+                db.session_set(token, u["user_id"], exp)
                 self._send_json({"ok": True, "token": token, "user_id": u["user_id"], "username": u["username"]})
             elif path == "/api/logout":
                 auth = self.headers.get("Authorization", "")
                 if auth.startswith("Bearer "):
                     _SESSIONS.pop(auth[7:].strip(), None)
+                    db.session_delete(auth[7:].strip())
                 self._send_json({"ok": True})
             elif path == "/api/change-password":
                 # 修改密码：需登录 + 密保邮箱验证（不再要求原密码）+ 验证码 + 滑块人机验证
@@ -1796,7 +1818,83 @@ class Handler(BaseHTTPRequestHandler):
                     cur_token = auth[7:].strip()
                 for tk in [tk for tk, (uid2, _) in _SESSIONS.items() if uid2 == uid and tk != cur_token]:
                     _SESSIONS.pop(tk, None)
+                db.session_delete_user(uid, keep_token=cur_token or None)
                 self._send_json({"ok": True, "message": "密码已修改"})
+            elif path == "/api/delete-account":
+                # 注销账号：需登录 + 密保邮箱验证 + 验证码 + 滑块，删除该用户全部数据
+                if uid is None:
+                    _send_auth_error(self)
+                    return
+                email = (body.get("email") or "").strip().lower()
+                captcha_id = (body.get("captcha_id") or "").strip()
+                captcha = (body.get("captcha") or "").strip().upper()
+                if not _verify_slider(body.get("slider_id"),
+                                      body.get("slider_x"),
+                                      body.get("slider_duration_ms"),
+                                      body.get("slider_samples")):
+                    self._send_json({"error": "滑块验证失败，请重试"}, 400)
+                    return
+                item = _CAPTCHAS.get(captcha_id)
+                if not item or item[1] < time.time():
+                    self._send_json({"error": "验证码已过期，请刷新"}, 400)
+                    return
+                if item[0] != captcha:
+                    self._send_json({"error": "验证码错误"}, 400)
+                    return
+                del _CAPTCHAS[captcha_id]
+                u = db.user_get_by_username(uname)
+                if not u or not u.get("email"):
+                    self._send_json({"error": "该账号未设置密保邮箱，无法注销"}, 400)
+                    return
+                if u["email"] != email:
+                    self._send_json({"error": "密保邮箱不正确"}, 400)
+                    return
+                # 清内存会话 + 删库 + 删用户数据
+                for tk in [tk for tk, (uid2, _) in _SESSIONS.items() if uid2 == uid]:
+                    _SESSIONS.pop(tk, None)
+                db.user_delete(uid)
+                self._send_json({"ok": True, "message": "账号已注销"})
+            elif path == "/api/reset-password":
+                # 忘记密码：无需登录，用 账号 + 密保邮箱 + 验证码 + 滑块 重置
+                username = (body.get("username") or "").strip()
+                email = (body.get("email") or "").strip().lower()
+                new_pw = body.get("new_password") or ""
+                captcha_id = (body.get("captcha_id") or "").strip()
+                captcha = (body.get("captcha") or "").strip().upper()
+                if not (re.fullmatch(r"[A-Za-z0-9]{8,20}", new_pw)
+                        and re.search(r"[A-Z]", new_pw)
+                        and re.search(r"[a-z]", new_pw)
+                        and re.search(r"[0-9]", new_pw)):
+                    self._send_json({"error": "新密码需 8-20 位，含大小写字母和数字"}, 400)
+                    return
+                if not _verify_slider(body.get("slider_id"),
+                                      body.get("slider_x"),
+                                      body.get("slider_duration_ms"),
+                                      body.get("slider_samples")):
+                    self._send_json({"error": "滑块验证失败，请重试"}, 400)
+                    return
+                item = _CAPTCHAS.get(captcha_id)
+                if not item or item[1] < time.time():
+                    self._send_json({"error": "验证码已过期，请刷新"}, 400)
+                    return
+                if item[0] != captcha:
+                    self._send_json({"error": "验证码错误"}, 400)
+                    return
+                del _CAPTCHAS[captcha_id]
+                u = db.user_get_by_username(username)
+                if not u or not u.get("email"):
+                    self._send_json({"error": "账号不存在或未设置密保邮箱"}, 400)
+                    return
+                if u["email"] != email:
+                    self._send_json({"error": "密保邮箱不正确"}, 400)
+                    return
+                ph, salt = hash_password(new_pw)
+                db.user_update_password(u["user_id"], ph, salt)
+                # 重置后该用户全部会话失效
+                for tk in [tk for tk, (uid2, _) in _SESSIONS.items() if uid2 == u["user_id"]]:
+                    _SESSIONS.pop(tk, None)
+                db.session_delete_user(u["user_id"])
+                self._send_json({"ok": True, "message": "密码已重置，请用新密码登录"})
             elif path == "/api/watchlist":
                 if uid is None:
                     _send_auth_error(self)
@@ -1919,6 +2017,7 @@ def main():
     print("=" * 56)
 
     db.init_db()  # 建表（幂等），数据库文件见 db.db_info()
+    db.session_cleanup()  # 清理过期会话（防 sessions 表无限增长）
     print(f"[i] 数据库: {db.db_info()['db_path']}")
     _backup_db_on_start()  # 启动时自动备份数据库（防更新覆盖/误删）
 

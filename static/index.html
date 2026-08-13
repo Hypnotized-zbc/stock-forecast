@@ -308,6 +308,23 @@
     </div>
   </div>
 </div>
+<!-- 注销账号弹窗 -->
+<div id="delAccOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1550;align-items:center;justify-content:center">
+  <div style="background:#fff;border-radius:12px;padding:22px 24px;width:360px;max-width:92vw;box-shadow:0 14px 50px rgba(0,0,0,.3)">
+    <div style="font-size:16px;font-weight:600;color:#dc2626;margin-bottom:6px" data-i18n="delAccTitle">注销账号</div>
+    <div style="font-size:12px;color:#6b7280;margin-bottom:12px" data-i18n="delAccWarn">将永久删除该账号及全部自选股/解读/历史数据，无法恢复。</div>
+    <div style="margin-bottom:4px"><input id="delEmail" type="email" style="width:100%;padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;box-sizing:border-box" data-i18n-ph="chgEmailPh" placeholder="密保邮箱（确认身份）"></div>
+    <div style="margin-bottom:4px;display:flex;gap:8px;align-items:center">
+      <input id="delCaptcha" type="text" style="flex:1;padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;box-sizing:border-box" data-i18n-ph="phCaptcha" placeholder="验证码" autocomplete="off">
+      <img id="delCaptchaImg" title="看不清？点一下换一张" style="height:38px;border-radius:6px;cursor:pointer;border:1px solid #e5e7eb">
+    </div>
+    <div id="delMsg" style="color:#c0392b;font-size:12px;min-height:18px;margin-bottom:8px"></div>
+    <div style="text-align:right">
+      <button id="delCancel" style="padding:7px 14px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;font-size:13px" data-i18n="cmpClose">关闭</button>
+      <button id="delOk" style="padding:7px 16px;border:none;border-radius:6px;background:#dc2626;color:#fff;cursor:pointer;font-size:13px;margin-left:8px" data-i18n="delOk">确认注销</button>
+    </div>
+  </div>
+</div>
 <!-- 滑块人机验证弹窗（修改密码） -->
 <div id="sliderOverlay">
   <div class="slider-box">
@@ -363,6 +380,9 @@ const I18N = {
     guideText: "👋 使用步骤：① 上方搜索股票 → ② 候选旁点 ＋ 加入自选 → ③ 点击自选股查看 K 线与预测。实时行情每 30 秒自动刷新。",
     guideClose: "知道了",
     chgPwd: "修改密码", chgPwdTitle: "修改密码",
+    delAcc: "注销账号", delAccTitle: "注销账号", delOk: "确认注销",
+    delAccWarn: "将永久删除该账号及全部自选股/解读/历史数据，无法恢复。",
+    delFillEmail: "请输入密保邮箱", slFail: "验证失败，请重试",
     chgEmailPh: "密保邮箱", chgNewPh: "新密码（8-20 位，含大小写字母和数字）", chgNew2Ph: "确认新密码", eFormat: "邮箱格式不正确",
     phCaptcha: "验证码",
     chgOk: "确认修改", chgFillAll: "请填写密保邮箱和新密码", chgNotMatch: "两次输入的新密码不一致",
@@ -416,6 +436,9 @@ const I18N = {
     guideText: "👋 How to use: ① Search a stock above → ② Click ＋ to add to watchlist → ③ Click a watchlist row to view K-line and forecasts. Quotes refresh every 30s.",
     guideClose: "Got it",
     chgPwd: "Change Password", chgPwdTitle: "Change Password",
+    delAcc: "Delete Account", delAccTitle: "Delete Account", delOk: "Delete",
+    delAccWarn: "This permanently deletes the account and all watchlists/insights/history. Cannot be undone.",
+    delFillEmail: "Enter security email", slFail: "Verification failed, retry",
     chgEmailPh: "Security email", chgNewPh: "New password (8-20 chars, upper+lower+digit)", chgNew2Ph: "Confirm new password", eFormat: "Invalid email format",
     phCaptcha: "Captcha",
     chgOk: "Confirm", chgFillAll: "Enter security email and new password", chgNotMatch: "New passwords do not match",
@@ -2052,8 +2075,10 @@ function renderAuthArea() {
   if (_username) {
     area.innerHTML = "<span style='color:#4b5563'>👤 " + esc(_username) + "</span> " +
       "<button id='chgPwdBtn' style='padding:3px 10px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;margin-left:6px'>" + t("chgPwd") + "</button>" +
+      "<button id='delAccBtn' style='padding:3px 10px;border:1px solid #fecaca;border-radius:6px;background:#fff;color:#dc2626;cursor:pointer;margin-left:6px'>" + t("delAcc") + "</button>" +
       "<button id='logoutBtn' style='padding:3px 10px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;margin-left:6px'>" + t("stLogout") + "</button>";
     document.getElementById("chgPwdBtn").addEventListener("click", openChgPwd);
+    document.getElementById("delAccBtn").addEventListener("click", openDelAcc);
     document.getElementById("logoutBtn").addEventListener("click", () => {
       cloudPost("/api/logout", {});
       _token = ""; _username = "";
@@ -2168,10 +2193,12 @@ document.getElementById("chgCaptchaImg").addEventListener("click", loadChgCaptch
 document.getElementById("chgCancel").addEventListener("click", closeChgPwd);
 document.getElementById("chgOk").addEventListener("click", submitChgPwd);
 
-// ---- 滑块人机验证（修改密码）----
+// ---- 滑块人机验证（修改密码/注销账号）----
 let _sliderData = null;
 let _sliderDrag = null;
-function openSlider() {
+let _sliderCallback = null;  // 滑块通过后的回调（默认 doRealChgPwd，注销时用 doRealDelAcc）
+function openSlider(cb) {
+  _sliderCallback = cb || null;
   document.getElementById("sliderOverlay").classList.add("show");
   const msg = document.getElementById("sliderMsg");
   msg.textContent = t("slLoading"); msg.className = "slider-msg";
@@ -2212,8 +2239,10 @@ function sliderSubmit() {
     setTimeout(loadSlider, 600);
     return;
   }
-  doRealChgPwd({id: _sliderData.id, x: Math.round(x),
-                duration_ms: dur, samples: d.samples});
+  const info = {id: _sliderData.id, x: Math.round(x),
+                duration_ms: dur, samples: d.samples};
+  if (_sliderCallback) { const cb = _sliderCallback; _sliderCallback = null; cb(info); }
+  else { doRealChgPwd(info); }
 }
 (function initSliderEvents() {
   const btn = document.getElementById("sliderBtn");
@@ -2247,6 +2276,85 @@ function sliderSubmit() {
     window.addEventListener("mouseup", onUp);
   });
 })();
+
+// ---- 注销账号（密保邮箱 + 验证码 + 滑块）----
+let _delCaptchaId = "";
+async function loadDelCaptcha() {
+  try {
+    const d = await (await fetch("/api/captcha")).json();
+    _delCaptchaId = d.captcha_id;
+    document.getElementById("delCaptchaImg").src = d.svg;
+  } catch (e) { /* 静默 */ }
+}
+function openDelAcc() {
+  document.getElementById("delAccOverlay").style.display = "flex";
+  document.getElementById("delEmail").value = "";
+  document.getElementById("delCaptcha").value = "";
+  document.getElementById("delMsg").textContent = "";
+  document.getElementById("delMsg").style.color = "#c0392b";
+  loadDelCaptcha();
+}
+function closeDelAcc() {
+  document.getElementById("delAccOverlay").style.display = "none";
+}
+function submitDelAcc() {
+  const email = document.getElementById("delEmail").value.trim().toLowerCase();
+  const captcha = document.getElementById("delCaptcha").value.trim();
+  const msg = document.getElementById("delMsg");
+  if (!email) { msg.textContent = t("delFillEmail"); return; }
+  if (!/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(email)) { msg.textContent = t("eFormat"); return; }
+  if (!captcha) { msg.textContent = t("needCaptcha"); return; }
+  openSlider((info) => doRealDelAcc(info));
+}
+async function doRealDelAcc(sliderInfo) {
+  const email = document.getElementById("delEmail").value.trim().toLowerCase();
+  const captcha = document.getElementById("delCaptcha").value.trim();
+  const msg = document.getElementById("delMsg");
+  const btn = document.getElementById("delOk");
+  btn.disabled = true;
+  try {
+    const resp = await fetch("/api/delete-account", {
+      method: "POST", headers: authHeaders(),
+      body: JSON.stringify({email: email,
+                            captcha_id: _delCaptchaId, captcha: captcha,
+                            slider_id: sliderInfo ? sliderInfo.id : "",
+                            slider_x: sliderInfo ? sliderInfo.x : 0,
+                            slider_duration_ms: sliderInfo ? sliderInfo.duration_ms : 0,
+                            slider_samples: sliderInfo ? sliderInfo.samples : 0})
+    });
+    const d = await resp.json();
+    if (!resp.ok) {
+      if (resp.status === 401) { handleAuthFail(); return; }
+      if (d.error && d.error.indexOf("滑块") >= 0) {
+        document.getElementById("sliderMsg").textContent = t("slFail");
+        document.getElementById("sliderMsg").className = "slider-msg";
+        loadSlider();
+        btn.disabled = false;
+        return;
+      }
+      closeSlider();
+      msg.textContent = d.error || t("reqFail");
+      loadDelCaptcha();
+      btn.disabled = false;
+      return;
+    }
+    closeSlider();
+    closeDelAcc();
+    // 注销成功：清本地登录态 + 自选股缓存 → 回登录页
+    _token = ""; _username = "";
+    try {
+      localStorage.removeItem("sf_token"); localStorage.removeItem("sf_user");
+      localStorage.removeItem("wl");
+    } catch (e) {}
+    location.href = "/";
+  } catch (e) {
+    btn.disabled = false;
+    msg.textContent = t("netErr");
+  }
+}
+document.getElementById("delCancel").addEventListener("click", closeDelAcc);
+document.getElementById("delCaptchaImg").addEventListener("click", loadDelCaptcha);
+document.getElementById("delOk").addEventListener("click", submitDelAcc);
 
 // ---- K线缓存：已下载过的股票（含自选股）当日不再重复下载 ----
 function cacheKey(secid, period) {

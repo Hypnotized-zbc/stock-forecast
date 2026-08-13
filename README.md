@@ -149,16 +149,20 @@ backend.py (Python 标准库 HTTP 服务)
 stock-forecast/
 ├── app.py              # 启动入口（python3 app.py）
 ├── backend.py          # 后端：数据源/指标/模型/HTTP API/AI 解读/认证/限速
-├── db.py               # 数据库：SQLite 四表（users/watchlist/ai_cache/history）
+├── db.py               # 数据库：SQLite 五表（users/sessions/watchlist/ai_cache/history）
 ├── static/login.html   # 登录/注册页（/）：背景图 + 中英切换 + 滑块验证
 ├── static/index.html   # 功能页（/app）：页面 + Canvas 图表 + 交互
-├── deploy/             # 部署文件（systemd 单元等）
+├── deploy/             # 部署文件（systemd 单元、Windows 启动/更新脚本）
 ├── tools/              # 工具（GitHub 上传 / 数据库备份）
 ├── tests/test_backend.py  # pytest 单元测试
 ├── backups/            # 每次改动前的版本备份 + 数据库备份
 ├── data/               # K 线 CSV 留档（自动生成）
+├── crawler/ examples/  # 早期爬虫/示例代码（保留供参考，主程序不依赖）
 └── stock_forecast.db   # 用户数据（自动生成，gitignore）
 ```
+
+> 说明：`crawler/`（早期公告爬虫）与 `examples/`（演示脚本）是开发历史遗留，
+> 与本 Web 应用运行无关，保留仅供参考，可自行删除。
 
 ---
 
@@ -171,20 +175,22 @@ stock-forecast/
 | `/api/quotes?secids=` | 批量实时行情 |
 | `/api/quote?secid=` | 单只实时行情 |
 | `/api/insight?secid=&name=&recent=` | AI 技术解读 |
-| `/api/captcha` | 图形验证码（注册用） |
-| `/api/slider` | 滑块人机验证拼图（登录/注册用） |
-| `/api/register` | 注册（POST: username, password, captcha_id, captcha, slider_*） |
-| `/api/login` | 登录（POST: username, password, slider_* → token） |
+| `/api/captcha` | 图形验证码（注册/改密/重置密码用） |
+| `/api/slider` | 滑块人机验证拼图（登录/注册/改密/重置密码用） |
+| `/api/register` | 注册（POST: username, password, email, captcha_id, captcha, slider_*） |
+| `/api/login` | 登录（POST: username, password, slider_* → token）。密保邮箱仅用于改密/重置，登录不需要 |
 | `/api/logout` | 登出（POST，带 Bearer token） |
 | `/api/me` | 当前登录用户（GET，带 Bearer token） |
-| `/api/change-password` | 修改密码（POST: old_password, new_password，带 Bearer token） |
+| `/api/change-password` | 修改密码（POST: email, new_password, captcha_id, captcha, slider_*，带 Bearer token，需登录） |
+| `/api/delete-account` | 注销账号（POST，带 Bearer token，删除该用户全部数据） |
 | `/api/watchlist` | 自选股列表（GET）／增删（POST: action=add/remove, secid, name），需登录 |
 | `/api/ai-cache` | AI 解读缓存（GET: ?secid=&period= ／POST 保存） |
 | `/api/history` | 查询历史（GET ／POST 记录） |
-| `/api/shutdown` | 页面关闭信号 |
+| `/api/shutdown` | 页面关闭信号（仅本地模式生效） |
 
-> 登录/注册需先通过滑块验证：前端拖动拼图后提交 `slider_id / slider_x /
-> slider_duration_ms / slider_samples` 四个参数。滑块接口和验证码接口均限速。
+> 登录/注册/改密/重置密码均需先通过滑块验证：前端拖动拼图后提交
+> `slider_id / slider_x / slider_duration_ms / slider_samples` 四个参数。
+> 滑块接口和验证码接口均限速。
 
 ---
 

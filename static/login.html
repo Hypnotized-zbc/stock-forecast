@@ -159,8 +159,31 @@
     </div>
     <div class="msg" id="authMsg"></div>
     <button class="submit" id="authSubmit" data-i18n="btnLogin">登录</button>
+    <div style="text-align:center;margin-top:10px">
+      <a id="forgotPwdLink" href="javascript:void(0)" style="font-size:12px;color:#2563eb;text-decoration:none" data-i18n="forgotPwd">忘记密码？</a>
+    </div>
   </div>
   <div class="foot" data-i18n="footNote">仅供学习研究，不构成投资建议</div>
+</div>
+<!-- 滑块人机验证弹窗：防止机器人批量登录/注册 -->
+<!-- 忘记密码弹窗 -->
+<div id="resetPwdOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1900;align-items:center;justify-content:center">
+  <div style="background:#fff;border-radius:12px;padding:22px 24px;width:360px;max-width:92vw;box-shadow:0 14px 50px rgba(0,0,0,.3)">
+    <div style="font-size:16px;font-weight:600;color:#111827;margin-bottom:14px" data-i18n="resetTitle">重置密码</div>
+    <div style="margin-bottom:4px"><input id="rpUsername" type="text" style="width:100%;padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;box-sizing:border-box" data-i18n-ph="phUser" placeholder="用户名"></div>
+    <div style="margin-bottom:4px"><input id="rpEmail" type="email" style="width:100%;padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;box-sizing:border-box" data-i18n-ph="phEmail" placeholder="密保邮箱"></div>
+    <div style="margin-bottom:4px"><input id="rpNew" type="password" style="width:100%;padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;box-sizing:border-box" data-i18n-ph="chgNewPh" placeholder="新密码（8-20 位，含大小写字母和数字）"></div>
+    <div style="margin-bottom:4px"><input id="rpNew2" type="password" style="width:100%;padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;box-sizing:border-box" data-i18n-ph="chgNew2Ph" placeholder="确认新密码"></div>
+    <div style="margin-bottom:4px;display:flex;gap:8px;align-items:center">
+      <input id="rpCaptcha" type="text" style="flex:1;padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;box-sizing:border-box" data-i18n-ph="phCaptcha" placeholder="验证码" autocomplete="off">
+      <img id="rpCaptchaImg" title="看不清？点一下换一张" style="height:38px;border-radius:6px;cursor:pointer;border:1px solid #e5e7eb">
+    </div>
+    <div id="rpMsg" style="color:#c0392b;font-size:12px;min-height:18px;margin-bottom:8px"></div>
+    <div style="text-align:right">
+      <button id="rpCancel" style="padding:7px 14px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;font-size:13px" data-i18n="cmpClose">关闭</button>
+      <button id="rpOk" style="padding:7px 16px;border:none;border-radius:6px;background:#2563eb;color:#fff;cursor:pointer;font-size:13px;margin-left:8px" data-i18n="resetOk">确认重置</button>
+    </div>
+  </div>
 </div>
 <!-- 滑块人机验证弹窗：防止机器人批量登录/注册 -->
 <div id="sliderOverlay">
@@ -200,6 +223,8 @@ const I18N = {
     netErr: "网络错误，请重试", okEnter: "登录成功，正在进入...", unknown: "未知错误", reqFail: "请求失败",
     slTitle: "安全验证", slTip: "拖动碎片到缺口处完成验证", slLoading: "正在加载验证...",
     slTooFast: "拖动太快或轨迹异常，请重试", slFail: "验证失败，请重试",
+    forgotPwd: "忘记密码？", resetTitle: "重置密码", resetOk: "确认重置",
+    resetFillAll: "请填写用户名、密保邮箱和新密码", resetOkMsg: "密码已重置，请用新密码登录",
     slDone: "验证通过", slDrag: "按住滑块向右拖动",
   },
   en: {
@@ -217,6 +242,8 @@ const I18N = {
     netErr: "Network error, please retry", okEnter: "Signed in, entering...", unknown: "Unknown error", reqFail: "Request failed",
     slTitle: "Security Verification", slTip: "Drag the piece to the gap", slLoading: "Loading verification...",
     slTooFast: "Dragged too fast or suspicious track, retry", slFail: "Verification failed, retry",
+    forgotPwd: "Forgot password?", resetTitle: "Reset Password", resetOk: "Reset",
+    resetFillAll: "Enter username, security email and new password", resetOkMsg: "Password reset, sign in with new password",
     slDone: "Verified", slDrag: "Hold and drag right",
   }
 };
@@ -318,8 +345,10 @@ $("captchaImg").addEventListener("click", loadCaptcha);
 // ---- 滑块人机验证 ----
 let _sliderData = null;  // 当前滑块 {id, trackW, cell, gapY}
 let _sliderDrag = null;  // 拖动状态 {startX, btnStart, pieceStart, t0, samples}
+let _sliderCallback = null;  // 滑块通过后的回调（默认 doRealSubmit，重置密码时用 doRealResetPwd）
 
-function openSlider() {
+function openSlider(cb) {
+  _sliderCallback = cb || null;
   const ov = document.getElementById("sliderOverlay");
   ov.classList.add("show");
   const msg = document.getElementById("sliderMsg");
@@ -363,9 +392,11 @@ function sliderSubmit() {
     setTimeout(loadSlider, 600);
     return;
   }
-  // 通过前端自检：真实提交登录/注册（后端会校验位置误差）
-  doRealSubmit({id: _sliderData.id, x: Math.round(x),
-                duration_ms: dur, samples: d.samples});
+  // 通过前端自检：真实提交（登录/注册/重置密码；后端会校验位置误差）
+  const info = {id: _sliderData.id, x: Math.round(x),
+                duration_ms: dur, samples: d.samples};
+  if (_sliderCallback) { const cb = _sliderCallback; _sliderCallback = null; cb(info); }
+  else { doRealSubmit(info); }
 }
 function initSliderEvents() {
   const btn = document.getElementById("sliderBtn");
@@ -484,6 +515,103 @@ $("authSubmit").addEventListener("click", authSubmit);
 $("authPassword").addEventListener("keydown", e => { if (e.key === "Enter") authSubmit(); });
 $("authCaptcha").addEventListener("keydown", e => { if (e.key === "Enter") authSubmit(); });
 initSliderEvents();
+
+// ---- 忘记密码（重置密码：账号 + 密保邮箱 + 验证码 + 滑块）----
+let _rpCaptchaId = "";
+function rpEmailError(v) {
+  if (!v) return "";
+  if (v.length > 100) return t("eLong");
+  if (!/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(v)) return t("eFormat");
+  return "";
+}
+async function loadRpCaptcha() {
+  try {
+    const d = await (await fetch("/api/captcha")).json();
+    _rpCaptchaId = d.captcha_id;
+    $("rpCaptchaImg").src = d.svg;
+  } catch (e) { /* 静默 */ }
+}
+function openResetPwd() {
+  $("resetPwdOverlay").style.display = "flex";
+  $("rpUsername").value = "";
+  $("rpEmail").value = "";
+  $("rpNew").value = "";
+  $("rpNew2").value = "";
+  $("rpCaptcha").value = "";
+  $("rpMsg").textContent = "";
+  $("rpMsg").className = "msg";
+  loadRpCaptcha();
+}
+function closeResetPwd() {
+  $("resetPwdOverlay").style.display = "none";
+}
+$("forgotPwdLink").addEventListener("click", openResetPwd);
+$("rpCancel").addEventListener("click", closeResetPwd);
+$("rpCaptchaImg").addEventListener("click", loadRpCaptcha);
+// 前置校验 → 弹滑块 → 滑块通过后 doRealResetPwd
+function submitResetPwd() {
+  const username = $("rpUsername").value.trim();
+  const email = $("rpEmail").value.trim().toLowerCase();
+  const newPw = $("rpNew").value;
+  const newPw2 = $("rpNew2").value;
+  const captcha = $("rpCaptcha").value.trim();
+  const msg = $("rpMsg");
+  if (!username || !email || !newPw) { msg.textContent = t("resetFillAll"); return; }
+  const uErr = usernameError(username);
+  if (uErr) { msg.textContent = uErr; return; }
+  const eErr = rpEmailError(email);
+  if (eErr) { msg.textContent = eErr; return; }
+  const pErr = passwordError(newPw);
+  if (pErr) { msg.textContent = pErr; return; }
+  if (newPw !== newPw2) { msg.textContent = t("chgNotMatch"); return; }
+  if (!captcha) { msg.textContent = t("needCaptcha"); return; }
+  openSlider((info) => doRealResetPwd(info));
+}
+async function doRealResetPwd(sliderInfo) {
+  const username = $("rpUsername").value.trim();
+  const email = $("rpEmail").value.trim().toLowerCase();
+  const newPw = $("rpNew").value;
+  const captcha = $("rpCaptcha").value.trim();
+  const msg = $("rpMsg");
+  const btn = $("rpOk");
+  btn.disabled = true;
+  try {
+    const r = await fetch("/api/reset-password", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({username: username, email: email, new_password: newPw,
+                            captcha_id: _rpCaptchaId, captcha: captcha,
+                            slider_id: sliderInfo ? sliderInfo.id : "",
+                            slider_x: sliderInfo ? sliderInfo.x : 0,
+                            slider_duration_ms: sliderInfo ? sliderInfo.duration_ms : 0,
+                            slider_samples: sliderInfo ? sliderInfo.samples : 0})
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      if (d.error && d.error.indexOf("滑块") >= 0) {
+        document.getElementById("sliderMsg").textContent = t("slFail");
+        document.getElementById("sliderMsg").className = "slider-msg";
+        loadSlider();
+        btn.disabled = false;
+        return;
+      }
+      closeSlider();
+      msg.textContent = d.error || t("reqFail");
+      loadRpCaptcha();
+      btn.disabled = false;
+      return;
+    }
+    closeSlider();
+    msg.className = "msg ok";
+    msg.textContent = d.message || t("resetOkMsg");
+    setTimeout(closeResetPwd, 1500);
+  } catch (e) {
+    btn.disabled = false;
+    msg.textContent = t("netErr");
+  }
+}
+$("rpOk").addEventListener("click", submitResetPwd);
+$("rpNew2").addEventListener("keydown", e => { if (e.key === "Enter") submitResetPwd(); });
 
 // 页面加载：应用语言偏好（登录页优先显示登录；不做自动跳转，避免登录页⇄功能页闪烁）
 setLang(_lang);

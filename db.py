@@ -74,6 +74,14 @@ def init_db():
                 name    TEXT NOT NULL,
                 ts      TEXT NOT NULL
             )""")
+        # 会话持久化（v0.21.0）：token 落盘，服务重启后仍保持登录
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                token     TEXT PRIMARY KEY,
+                user_id   INTEGER NOT NULL,
+                expire_ts REAL NOT NULL,
+                created_at TEXT NOT NULL
+            )""")
         conn.commit()
     finally:
         conn.close()
@@ -140,6 +148,75 @@ def user_update_password(user_id, password_hash, salt):
         conn.execute(
             "UPDATE users SET password_hash=?, salt=? WHERE user_id=?",
             (password_hash, salt, user_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def user_delete(user_id):
+    """注销账号：删除用户及其所有数据（自选股/AI缓存/历史/会话）。"""
+    conn = _conn()
+    try:
+        for table in ("sessions", "watchlist", "ai_cache", "history"):
+            conn.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
+        conn.execute("DELETE FROM users WHERE user_id=?", (user_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ---------------- sessions（会话持久化） ----------------
+
+def session_set(token, user_id, expire_ts):
+    conn = _conn()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO sessions (token, user_id, expire_ts, created_at) VALUES (?,?,?,?)",
+            (token, user_id, expire_ts, time.strftime("%Y-%m-%d %H:%M:%S")))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def session_get(token):
+    conn = _conn()
+    try:
+        row = conn.execute(
+            "SELECT user_id, expire_ts FROM sessions WHERE token=?", (token,)).fetchone()
+        if not row:
+            return None
+        return {"user_id": row[0], "expire_ts": row[1]}
+    finally:
+        conn.close()
+
+
+def session_delete(token):
+    conn = _conn()
+    try:
+        conn.execute("DELETE FROM sessions WHERE token=?", (token,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def session_delete_user(user_id, keep_token=None):
+    """删除某用户全部会话（改密/注销用）；keep_token 保留的除外。"""
+    conn = _conn()
+    try:
+        if keep_token:
+            conn.execute("DELETE FROM sessions WHERE user_id=? AND token<>?", (user_id, keep_token))
+        else:
+            conn.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def session_cleanup():
+    """删除全部过期会话，防 sessions 表无限增长。"""
+    conn = _conn()
+    try:
+        conn.execute("DELETE FROM sessions WHERE expire_ts < ?", (time.time(),))
         conn.commit()
     finally:
         conn.close()
