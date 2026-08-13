@@ -22,6 +22,49 @@
   .lang-switch .lang-item:first-child { border-radius: 20px 0 0 20px; }
   .lang-switch .lang-item:last-child { border-radius: 0 20px 20px 0; }
   .lang-switch .lang-item.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+  /* ---- 滑块人机验证弹窗（修改密码用，样式与登录页一致）---- */
+  #sliderOverlay {
+    display: none; position: fixed; inset: 0; z-index: 2000;
+    background: rgba(0,0,0,.55); align-items: center; justify-content: center;
+  }
+  #sliderOverlay.show { display: flex; }
+  .slider-box {
+    width: 360px; max-width: 92vw; background: #fff; border-radius: 14px;
+    box-shadow: 0 16px 60px rgba(0,0,0,.35); padding: 20px 22px 18px;
+    text-align: center;
+  }
+  .slider-box h3 { margin: 0 0 4px; font-size: 16px; color: #111827; }
+  .slider-tip { font-size: 12px; color: #9ca3af; margin-bottom: 12px; }
+  .slider-track {
+    position: relative; width: 280px; height: 160px; margin: 0 auto;
+    border-radius: 8px; overflow: hidden; background: #e5e7eb;
+  }
+  .slider-track img.bg { width: 100%; height: 100%; display: block; }
+  .slider-piece {
+    position: absolute; top: 0; left: 0; width: 40px; height: 40px;
+    cursor: grab; user-select: none; z-index: 2;
+    border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,.35);
+  }
+  .slider-piece.dragging { cursor: grabbing; }
+  .slider-bar {
+    position: relative; width: 280px; height: 40px; margin: 12px auto 0;
+    background: #f1f5f9; border: 1px solid #d1d5db; border-radius: 20px;
+  }
+  .slider-bar .fill {
+    position: absolute; left: 0; top: 0; bottom: 0; width: 0;
+    background: #2563eb; opacity: .18; border-radius: 20px; transition: width .08s;
+  }
+  .slider-btn {
+    position: absolute; left: 2px; top: 2px; width: 36px; height: 36px;
+    background: #fff; border: 1px solid #cbd5e1; border-radius: 50%;
+    cursor: grab; z-index: 3; display: flex; align-items: center; justify-content: center;
+    font-size: 15px; color: #2563eb; box-shadow: 0 2px 6px rgba(0,0,0,.2);
+    transition: box-shadow .15s;
+  }
+  .slider-btn.dragging { cursor: grabbing; box-shadow: 0 4px 12px rgba(0,0,0,.3); }
+  .slider-msg { font-size: 12px; min-height: 18px; margin-top: 8px; color: #c0392b; }
+  .slider-msg.ok { color: #16a34a; }
+  .slider-msg.ing { color: #2563eb; }
   .query-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
                background: #fff; border-radius: 8px; padding: 12px 14px;
                box-shadow: 0 2px 8px rgba(0,0,0,.06); }
@@ -247,16 +290,38 @@
 <div id="authModal" style="display:none"></div>
 <!-- 修改密码弹窗 -->
 <div id="chgPwdOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1500;align-items:center;justify-content:center">
-  <div style="background:#fff;border-radius:12px;padding:22px 24px;width:340px;max-width:92vw;box-shadow:0 14px 50px rgba(0,0,0,.3)">
+  <div style="background:#fff;border-radius:12px;padding:22px 24px;width:360px;max-width:92vw;box-shadow:0 14px 50px rgba(0,0,0,.3)">
     <div style="font-size:16px;font-weight:600;color:#111827;margin-bottom:14px" data-i18n="chgPwdTitle">修改密码</div>
-    <div style="margin-bottom:10px"><input id="chgEmail" type="email" style="width:100%;padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px" data-i18n-ph="chgEmailPh" placeholder="密保邮箱"></div>
-    <div style="margin-bottom:10px"><input id="chgNew" type="password" style="width:100%;padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px" data-i18n-ph="chgNewPh" placeholder="新密码（8-20 位，含大小写字母和数字）"></div>
-    <div style="margin-bottom:12px"><input id="chgNew2" type="password" style="width:100%;padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px" data-i18n-ph="chgNew2Ph" placeholder="确认新密码"></div>
+    <div style="margin-bottom:10px"><input id="chgEmail" type="email" style="width:100%;padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;box-sizing:border-box" data-i18n-ph="chgEmailPh" placeholder="密保邮箱"></div>
+    <div style="margin-bottom:4px"><input id="chgNew" type="password" style="width:100%;padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;box-sizing:border-box" data-i18n-ph="chgNewPh" placeholder="新密码（8-20 位，含大小写字母和数字）"></div>
+    <div id="chgNewHint" style="color:#dc2626;font-size:12px;min-height:16px;margin-bottom:4px"></div>
+    <div style="margin-bottom:4px"><input id="chgNew2" type="password" style="width:100%;padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;box-sizing:border-box" data-i18n-ph="chgNew2Ph" placeholder="确认新密码"></div>
+    <div id="chgNew2Hint" style="color:#dc2626;font-size:12px;min-height:16px;margin-bottom:4px"></div>
+    <div style="margin-bottom:4px;display:flex;gap:8px;align-items:center">
+      <input id="chgCaptcha" type="text" style="flex:1;padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;box-sizing:border-box" data-i18n-ph="phCaptcha" placeholder="验证码" autocomplete="off">
+      <img id="chgCaptchaImg" title="看不清？点一下换一张" style="height:38px;border-radius:6px;cursor:pointer;border:1px solid #e5e7eb">
+    </div>
     <div id="chgMsg" style="color:#c0392b;font-size:12px;min-height:18px;margin-bottom:8px"></div>
     <div style="text-align:right">
       <button id="chgCancel" style="padding:7px 14px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;font-size:13px" data-i18n="cmpClose">关闭</button>
       <button id="chgOk" style="padding:7px 16px;border:none;border-radius:6px;background:#2563eb;color:#fff;cursor:pointer;font-size:13px;margin-left:8px" data-i18n="chgOk">确认修改</button>
     </div>
+  </div>
+</div>
+<!-- 滑块人机验证弹窗（修改密码） -->
+<div id="sliderOverlay">
+  <div class="slider-box">
+    <h3 data-i18n="slTitle">安全验证</h3>
+    <div class="slider-tip" data-i18n="slTip">拖动碎片到缺口处完成验证</div>
+    <div class="slider-track" id="sliderTrack">
+      <img class="bg" id="sliderBg" alt="">
+      <div class="slider-piece" id="sliderPiece"><img src="" alt="" style="width:40px;height:40px;display:block;border-radius:6px"></div>
+    </div>
+    <div class="slider-bar">
+      <div class="fill" id="sliderFill"></div>
+      <div class="slider-btn" id="sliderBtn">→</div>
+    </div>
+    <div class="slider-msg" id="sliderMsg"></div>
   </div>
 </div>
 <script>
@@ -301,6 +366,9 @@ const I18N = {
     chgEmailPh: "密保邮箱", chgNewPh: "新密码（8-20 位，含大小写字母和数字）", chgNew2Ph: "确认新密码", eFormat: "邮箱格式不正确",
     chgOk: "确认修改", chgFillAll: "请填写原密码和新密码", chgNotMatch: "两次输入的新密码不一致",
     chgOkMsg: "密码已修改", netErr: "网络错误，请重试", reqFail: "请求失败",
+    needCaptcha: "请输入验证码",
+    slTitle: "安全验证", slTip: "拖动碎片到缺口处完成验证",
+    slLoading: "正在加载验证...", slDrag: "请拖动滑块到缺口处", slTooFast: "拖动太快，请重试",
     pShort: "密码过短，至少 8 位", pLong: "密码过长，最多 20 位", pChar: "密码只能包含字母和数字",
     pUpper: "密码需包含大写字母", pLower: "密码需包含小写字母", pDigit: "密码需包含数字",
     aiTitle: "AI 技术解读", aiRegen: "重新生成", aiRegenTip: "重新生成解读（覆盖缓存）", aiCloseTip: "关闭解读窗口",
@@ -350,6 +418,9 @@ const I18N = {
     chgEmailPh: "Security email", chgNewPh: "New password (8-20 chars, upper+lower+digit)", chgNew2Ph: "Confirm new password", eFormat: "Invalid email format",
     chgOk: "Confirm", chgFillAll: "Enter current and new password", chgNotMatch: "New passwords do not match",
     chgOkMsg: "Password changed", netErr: "Network error, please retry", reqFail: "Request failed",
+    needCaptcha: "Please enter the captcha",
+    slTitle: "Security Check", slTip: "Drag the piece to the gap to verify",
+    slLoading: "Loading...", slDrag: "Drag the slider to the gap", slTooFast: "Too fast, please retry",
     pShort: "Password too short, min 8 chars", pLong: "Password too long, max 20 chars", pChar: "Password: letters and digits only",
     pUpper: "Password needs an uppercase letter", pLower: "Password needs a lowercase letter", pDigit: "Password needs a digit",
     aiTitle: "AI Technical Insight", aiRegen: "Regenerate", aiRegenTip: "Regenerate insight (overwrite cache)", aiCloseTip: "Close insight panel",
@@ -1999,7 +2070,7 @@ function renderAuthArea() {
   }
 }
 
-// ---- 修改密码 ----
+// ---- 修改密码（密保邮箱 + 验证码 + 滑块人机验证）----
 function passwordError(v) {
   if (!v) return "";
   if (v.length < 8) return t("pShort");
@@ -2010,43 +2081,170 @@ function passwordError(v) {
   if (!/[0-9]/.test(v)) return t("pDigit");
   return "";
 }
+let _chgCaptchaId = "";
+function chgNewHint() {
+  const v = document.getElementById("chgNew").value;
+  document.getElementById("chgNewHint").textContent = passwordError(v);
+}
+function chgNew2Hint() {
+  const v = document.getElementById("chgNew").value;
+  const v2 = document.getElementById("chgNew2").value;
+  if (!v2) { document.getElementById("chgNew2Hint").textContent = ""; return; }
+  document.getElementById("chgNew2Hint").textContent = v === v2 ? "" : t("chgNotMatch");
+}
+async function loadChgCaptcha() {
+  try {
+    const d = await (await fetch("/api/captcha")).json();
+    _chgCaptchaId = d.captcha_id;
+    document.getElementById("chgCaptchaImg").src = d.svg;
+  } catch (e) { /* 静默 */ }
+}
 function openChgPwd() {
   document.getElementById("chgPwdOverlay").style.display = "flex";
   document.getElementById("chgEmail").value = "";
   document.getElementById("chgNew").value = "";
   document.getElementById("chgNew2").value = "";
+  document.getElementById("chgCaptcha").value = "";
+  document.getElementById("chgNewHint").textContent = "";
+  document.getElementById("chgNew2Hint").textContent = "";
   document.getElementById("chgMsg").textContent = "";
   document.getElementById("chgMsg").style.color = "#c0392b";
+  loadChgCaptcha();
 }
 function closeChgPwd() {
   document.getElementById("chgPwdOverlay").style.display = "none";
 }
+// 修改密码提交：前置校验（邮箱/密码/两次一致/验证码）→ 弹滑块 → 滑块通过后真正提交
 function submitChgPwd() {
   const email = document.getElementById("chgEmail").value.trim().toLowerCase();
   const newPw = document.getElementById("chgNew").value;
   const newPw2 = document.getElementById("chgNew2").value;
+  const captcha = document.getElementById("chgCaptcha").value.trim();
   const msg = document.getElementById("chgMsg");
   if (!email || !newPw) { msg.textContent = t("chgFillAll"); return; }
   if (!/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(email)) { msg.textContent = t("eFormat"); return; }
   const pErr = passwordError(newPw);
   if (pErr) { msg.textContent = pErr; return; }
   if (newPw !== newPw2) { msg.textContent = t("chgNotMatch"); return; }
-  fetch("/api/change-password", {method: "POST", headers: authHeaders(), body: JSON.stringify({email: email, new_password: newPw})})
-    .then(async r => {
-      const d = await r.json();
-      if (!r.ok) {
-        if (r.status === 401) { handleAuthFail(); return; }
-        msg.textContent = d.error || t("reqFail");
-        return;
-      }
-      msg.style.color = "#16a34a";
-      msg.textContent = t("chgOkMsg");
-      setTimeout(closeChgPwd, 1200);
-    })
-    .catch(() => { msg.textContent = t("netErr"); });
+  if (!captcha) { msg.textContent = t("needCaptcha"); return; }
+  openSlider();  // 滑块通过后由 doRealChgPwd 提交
 }
+async function doRealChgPwd(sliderInfo) {
+  const email = document.getElementById("chgEmail").value.trim().toLowerCase();
+  const newPw = document.getElementById("chgNew").value;
+  const captcha = document.getElementById("chgCaptcha").value.trim();
+  const msg = document.getElementById("chgMsg");
+  const btn = document.getElementById("chgOk");
+  btn.disabled = true;
+  try {
+    const resp = await fetch("/api/change-password", {
+      method: "POST", headers: authHeaders(),
+      body: JSON.stringify({email: email, new_password: newPw,
+                            captcha_id: _chgCaptchaId, captcha: captcha,
+                            slider_id: sliderInfo.id, slider_x: sliderInfo.x,
+                            slider_duration_ms: sliderInfo.duration_ms,
+                            slider_samples: sliderInfo.samples})
+    });
+    const d = await resp.json();
+    if (!resp.ok) {
+      if (resp.status === 401) { handleAuthFail(); return; }
+      msg.textContent = d.error || t("reqFail");
+      return;
+    }
+    msg.style.color = "#16a34a";
+    msg.textContent = t("chgOkMsg");
+    setTimeout(closeChgPwd, 1200);
+  } catch (e) {
+    msg.textContent = t("netErr");
+  } finally {
+    btn.disabled = false;
+  }
+}
+document.getElementById("chgNew").addEventListener("input", () => { chgNewHint(); chgNew2Hint(); });
+document.getElementById("chgNew2").addEventListener("input", chgNew2Hint);
+document.getElementById("chgCaptchaImg").addEventListener("click", loadChgCaptcha);
 document.getElementById("chgCancel").addEventListener("click", closeChgPwd);
 document.getElementById("chgOk").addEventListener("click", submitChgPwd);
+
+// ---- 滑块人机验证（修改密码）----
+let _sliderData = null;
+let _sliderDrag = null;
+function openSlider() {
+  document.getElementById("sliderOverlay").classList.add("show");
+  const msg = document.getElementById("sliderMsg");
+  msg.textContent = t("slLoading"); msg.className = "slider-msg";
+  loadSlider();
+}
+function closeSlider() {
+  document.getElementById("sliderOverlay").classList.remove("show");
+}
+function loadSlider() {
+  const msg = document.getElementById("sliderMsg");
+  msg.textContent = t("slLoading"); msg.className = "slider-msg";
+  fetch("/api/slider").then(r => r.json()).then(d => {
+    _sliderData = {id: d.slider_id, trackW: d.track_w, cell: d.cell, gapY: d.gap_y};
+    document.getElementById("sliderBg").src = d.bg;
+    document.getElementById("sliderPiece").querySelector("img").src = d.piece;
+    const piece = document.getElementById("sliderPiece");
+    piece.style.top = (d.gap_y - d.cell / 2) + "px";
+    piece.style.left = "0px";
+    const btn = document.getElementById("sliderBtn");
+    btn.style.left = "2px";
+    document.getElementById("sliderFill").style.width = "0px";
+    msg.textContent = t("slDrag"); msg.className = "slider-msg";
+  }).catch(() => {
+    msg.textContent = t("reqFail"); msg.className = "slider-msg";
+  });
+}
+function sliderSubmit() {
+  const d = _sliderDrag;
+  _sliderDrag = null;
+  document.getElementById("sliderBtn").classList.remove("dragging");
+  const btn = document.getElementById("sliderBtn");
+  const msg = document.getElementById("sliderMsg");
+  if (!d || !_sliderData) return;
+  const dur = Date.now() - d.t0;
+  const x = parseFloat(btn.style.left) + _sliderData.cell / 2;
+  if (dur < 300 || d.samples < 3) {
+    msg.textContent = t("slTooFast"); msg.className = "slider-msg";
+    setTimeout(loadSlider, 600);
+    return;
+  }
+  doRealChgPwd({id: _sliderData.id, x: Math.round(x),
+                duration_ms: dur, samples: d.samples});
+}
+(function initSliderEvents() {
+  const btn = document.getElementById("sliderBtn");
+  const piece = document.getElementById("sliderPiece");
+  const fill = document.getElementById("sliderFill");
+  btn.addEventListener("mousedown", e => {
+    e.preventDefault();
+    const trackW = _sliderData ? _sliderData.trackW : 280;
+    const cell = _sliderData ? _sliderData.cell : 40;
+    _sliderDrag = {startX: e.clientX, btnStart: parseFloat(btn.style.left) || 2,
+                   pieceStart: parseFloat(piece.style.left) || 0,
+                   t0: Date.now(), samples: 1,
+                   maxX: trackW - cell};
+    btn.classList.add("dragging"); piece.classList.add("dragging");
+    const onMove = ev => {
+      if (!_sliderDrag) return;
+      let dx = ev.clientX - _sliderDrag.startX;
+      let bx = Math.max(2, Math.min(_sliderDrag.maxX, _sliderDrag.btnStart + dx));
+      btn.style.left = bx + "px";
+      piece.style.left = (bx - 2) + "px";
+      fill.style.width = (bx - 2) + "px";
+      _sliderDrag.samples++;
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      piece.classList.remove("dragging");
+      sliderSubmit();
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  });
+})();
 
 // ---- K线缓存：已下载过的股票（含自选股）当日不再重复下载 ----
 function cacheKey(secid, period) {

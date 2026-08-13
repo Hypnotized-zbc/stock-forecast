@@ -1747,18 +1747,36 @@ class Handler(BaseHTTPRequestHandler):
                     _SESSIONS.pop(auth[7:].strip(), None)
                 self._send_json({"ok": True})
             elif path == "/api/change-password":
-                # 修改密码：需登录 + 密保邮箱验证（不再要求原密码）+ 新密码格式合法
+                # 修改密码：需登录 + 密保邮箱验证（不再要求原密码）+ 验证码 + 滑块人机验证
                 if uid is None:
                     _send_auth_error(self)
                     return
                 email = (body.get("email") or "").strip().lower()
                 new_pw = body.get("new_password") or ""
+                captcha_id = (body.get("captcha_id") or "").strip()
+                captcha = (body.get("captcha") or "").strip().upper()
                 if not (re.fullmatch(r"[A-Za-z0-9]{8,20}", new_pw)
                         and re.search(r"[A-Z]", new_pw)
                         and re.search(r"[a-z]", new_pw)
                         and re.search(r"[0-9]", new_pw)):
                     self._send_json({"error": "新密码需 8-20 位，含大小写字母和数字"}, 400)
                     return
+                # 滑块人机验证（防止机器人批量改密）
+                if not _verify_slider(body.get("slider_id"),
+                                      body.get("slider_x"),
+                                      body.get("slider_duration_ms"),
+                                      body.get("slider_samples")):
+                    self._send_json({"error": "滑块验证失败，请重试"}, 400)
+                    return
+                # 图形验证码
+                item = _CAPTCHAS.get(captcha_id)
+                if not item or item[1] < time.time():
+                    self._send_json({"error": "验证码已过期，请刷新"}, 400)
+                    return
+                if item[0] != captcha:
+                    self._send_json({"error": "验证码错误"}, 400)
+                    return
+                del _CAPTCHAS[captcha_id]  # 验证码一次性
                 u = db.user_get_by_username(uname)
                 if not u:
                     self._send_json({"error": "用户不存在"}, 400)
