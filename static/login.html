@@ -35,6 +35,8 @@
     font-size: 14px; outline: none; transition: border .15s;
   }
   .field input:focus { border-color: #2563eb; }
+  .hint { color: #dc2626; font-size: 12px; margin-top: 4px; min-height: 16px; line-height: 1.4; }
+  .hint:empty { margin-top: 0; }
   .captcha-row { display: flex; gap: 10px; }
   .captcha-row input { flex: 1; text-transform: uppercase; }
   .captcha-row img {
@@ -64,8 +66,14 @@
     <button class="tab" id="tabReg">注册</button>
   </div>
   <div id="formArea">
-    <div class="field"><input id="authUsername" type="text" placeholder="用户名：字母/数字/下划线，3-20 字符" autocomplete="username"></div>
-    <div class="field"><input id="authPassword" type="password" placeholder="密码：8-20 位，含大小写字母和数字" autocomplete="current-password"></div>
+    <div class="field">
+      <input id="authUsername" type="text" placeholder="用户名：字母/数字/下划线，3-20 字符" autocomplete="username">
+      <div class="hint" id="usernameHint"></div>
+    </div>
+    <div class="field">
+      <input id="authPassword" type="password" placeholder="密码：8-20 位，含大小写字母和数字" autocomplete="current-password">
+      <div class="hint" id="passwordHint"></div>
+    </div>
     <div class="field captcha-row" id="captchaRow" style="display:none">
       <input id="authCaptcha" type="text" placeholder="验证码" autocomplete="off">
       <img id="captchaImg" title="看不清？点一下换一张">
@@ -91,11 +99,39 @@ function setTab(mode) {
   $("authUsername").value = "";
   $("authPassword").value = "";
   $("authCaptcha").value = "";
+  $("usernameHint").textContent = "";
+  $("passwordHint").textContent = "";
   $("authPassword").autocomplete = mode === "register" ? "new-password" : "current-password";
   if (mode === "register") loadCaptcha();
 }
 $("tabLogin").addEventListener("click", () => setTab("login"));
 $("tabReg").addEventListener("click", () => setTab("register"));
+
+// 实时合法性校验：返回不合法原因（空串=合法）
+function usernameError(v) {
+  if (!v) return "";
+  if (v.length < 3) return "用户名过短，至少 3 个字符";
+  if (v.length > 20) return "用户名过长，最多 20 个字符";
+  if (!/^[A-Za-z0-9_]+$/.test(v)) return "用户名只能包含字母、数字、下划线";
+  if (/^_+$/.test(v)) return "用户名不能只用下划线";
+  return "";
+}
+function passwordError(v) {
+  if (!v) return "";
+  if (v.length < 8) return "密码过短，至少 8 位";
+  if (v.length > 20) return "密码过长，最多 20 位";
+  if (!/^[A-Za-z0-9]+$/.test(v)) return "密码只能包含字母和数字";
+  if (!/[A-Z]/.test(v)) return "密码需包含大写字母";
+  if (!/[a-z]/.test(v)) return "密码需包含小写字母";
+  if (!/[0-9]/.test(v)) return "密码需包含数字";
+  return "";
+}
+function updateHints() {
+  $("usernameHint").textContent = usernameError($("authUsername").value);
+  $("passwordHint").textContent = passwordError($("authPassword").value);
+}
+$("authUsername").addEventListener("input", updateHints);
+$("authPassword").addEventListener("input", updateHints);
 
 async function loadCaptcha() {
   try {
@@ -116,23 +152,19 @@ async function authSubmit() {
   try {
     let path, body;
     if (_authMode === "register") {
-      if (!/^[A-Za-z0-9_]{3,20}$/.test(username)) {
-        msg.textContent = "用户名仅限字母/数字/下划线，长度 3-20 个字符";
-        btn.disabled = false; return;
-      }
-      if (!/^[A-Za-z0-9]{8,20}$/.test(password)) {
-        msg.textContent = "密码仅限字母/数字，长度 8-20 个字符";
-        btn.disabled = false; return;
-      }
-      if (!/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/[0-9]/.test(password)) {
-        msg.textContent = "密码必须同时包含大写字母、小写字母和数字";
-        btn.disabled = false; return;
-      }
+      const uErr = usernameError(username);
+      if (uErr) { msg.textContent = uErr; btn.disabled = false; return; }
+      const pErr = passwordError(password);
+      if (pErr) { msg.textContent = pErr; btn.disabled = false; return; }
       if (!captcha) { msg.textContent = "请输入验证码"; btn.disabled = false; return; }
       path = "/api/register";
       body = {username, password, captcha_id: _captchaId, captcha};
     } else {
       if (!username || !password) { msg.textContent = "请输入用户名和密码"; btn.disabled = false; return; }
+      const uErr = usernameError(username);
+      if (uErr) { msg.textContent = uErr; btn.disabled = false; return; }
+      const pErr = passwordError(password);
+      if (pErr) { msg.textContent = pErr; btn.disabled = false; return; }
       path = "/api/login";
       body = {username, password};
     }

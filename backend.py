@@ -1492,6 +1492,10 @@ class Handler(BaseHTTPRequestHandler):
                 if not re.fullmatch(r"[A-Za-z0-9_]{3,20}", username):
                     self._send_json({"error": "用户名仅限字母/数字/下划线，长度 3-20 个字符"}, 400)
                     return
+                # 用户名不能只用下划线（纯 _ 串无实际辨识度）
+                if re.fullmatch(r"_+", username):
+                    self._send_json({"error": "用户名不能只用下划线"}, 400)
+                    return
                 # 密码：仅字母/数字（无特殊字符），长度 8-20，且必须含大写+小写+数字
                 if not re.fullmatch(r"[A-Za-z0-9]{8,20}", password):
                     self._send_json({"error": "密码仅限字母/数字，长度 8-20 个字符"}, 400)
