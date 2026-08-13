@@ -196,8 +196,8 @@ stock-forecast/
 | `/api/watchlist` | 自选股列表（GET）／增删（POST: action=add/remove, secid, name），需登录 |
 | `/api/ai-cache` | AI 解读缓存（GET: ?secid=&period= ／POST 保存） |
 | `/api/history` | 查询历史（GET ／POST 记录） |
-| `/api/leaderboard?kind=` | 沪深A股排行榜（kind: up/down/amount/turnover/volratio，60 秒缓存 + 磁盘缓存兜底） |
-| `/api/fflow?secid=&days=` | 个股历史资金流（主力/超大/大/中/小单净流入，10~120 日，60 秒缓存 + 磁盘缓存兜底） |
+| `/api/leaderboard?kind=` | 沪深A股排行榜（kind: up/down/amount/turnover/volratio；东财→新浪→磁盘缓存三级，启动预取+2h 刷新） |
+| `/api/fflow?secid=&days=` | 个股历史资金流（主力/超大/大/中/小单净流入，10~120 日；东财→新浪→磁盘缓存三级） |
 | `/api/shutdown` | 页面关闭信号（仅本地模式生效） |
 
 > 登录/注册/改密/重置密码均需先通过滑块验证：前端拖动拼图后提交

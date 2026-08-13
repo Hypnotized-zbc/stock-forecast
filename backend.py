@@ -63,8 +63,16 @@ def load_login_html():
 
 SEARCH_API = "https://searchapi.eastmoney.com/api/suggest/get"
 KLINE_API = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
-CLIST_API = "https://push2.eastmoney.com/api/qt/clist/get"          # 排行榜
-FFLOW_API = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get"  # 个股资金流
+CLIST_API = "https://push2.eastmoney.com/api/qt/clist/get"          # 排行榜（东财主源）
+FFLOW_API = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get"  # 个股资金流（东财主源）
+# 新浪备源：排行榜（无 volratio 量比字段）/ 个股资金流历史
+SINA_RANK_API = "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData"
+SINA_FFLOW_API = "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_qsfx_lscjfb"
+SINA_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Referer": "https://finance.sina.com.cn/",
+}
 PUBLIC_TOKEN = "D43BF722C8E33BDC906FB84D85E326E8"
 
 # 排行榜 / 资金流缓存（60 秒）：防止频繁请求被东财限流
@@ -140,17 +148,18 @@ def _parse_json_text(text):
     raise ValueError(f"无法解析响应: {t[:80]!r}")
 
 
-def get_json(url, params, retries=4, timeout=10):
+def get_json(url, params, retries=4, timeout=10, headers=None):
     """GET JSON，失败重试。
 
     WSL 网络间歇抖动（东财接口偶发 RemoteDisconnected），重试 4 次、
     指数退避；总等待控制在约 30 秒内，避免浏览器端等待过久。
     timeout：行情类接口传小值（如 4s）快速失败，尽早切换备用源。
+    headers：默认东财 HEADERS；新浪接口传 SINA_HEADERS。
     """
     last_err = None
     for attempt in range(1, retries + 1):
         try:
-            resp = _SESSION.get(url, params=params, headers=HEADERS, timeout=timeout)
+            resp = _SESSION.get(url, params=params, headers=headers or HEADERS, timeout=timeout)
             resp.raise_for_status()
             return _parse_json_text(resp.text)
         except (requests.RequestException, ValueError) as exc:
@@ -1179,12 +1188,97 @@ def compute_fits(closes, dates=None, horizon=10):
 
 
 # ---------------------------------------------------------------------------
-def fetch_leaderboard(kind="up", size=100):
-    """沪深A股排行榜（东财 clist）。kind: up=涨幅榜 / down=跌幅榜 / amount=成交额 /
-    turnover=换手率 / volratio=量比。60 秒内存缓存 + 磁盘缓存兜底（接口失败时
-    返回上次成功数据，标注 cached=true，避免信息源抖动导致页面空白）。
+def _num(it, k):
+    """安全取数字字段。"""
+    try:
+        v = float(it.get(k))
+        return v
+    except (TypeError, ValueError):
+        return None
 
-    fs 含义：m:0+t:6 深A主板、m:0+t:80 深A(含创业)、m:1+t:2 沪A主板、m:1+t:23 沪A(含科创)。
+
+def _fetch_leaderboard_sina(kind):
+    """新浪排行榜备源（Market_Center.getHQNodeData）。
+
+    sort：changepercent(涨跌幅) / amount(成交额) / turnoverratio(换手率)。
+    与东财差异：新浪无 volratio 量比字段（量比榜仅东财源）、mktcap 单位万元、
+    volume 单位股（此处统一转手/元，与东财一致）。
+    """
+    sort_map = {"up": "changepercent", "down": "changepercent",
+                "amount": "amount", "turnover": "turnoverratio"}
+    sort = sort_map.get(kind)
+    if not sort:
+        return []  # volratio 量比榜新浪不支持
+    asc = 1 if kind == "down" else 0  # down=升序（跌幅榜）
+    params = {"page": 1, "num": 100, "sort": sort, "asc": asc,
+              "node": "hs_a", "symbol": "", "_s_r_a": "init"}
+    data = get_json(SINA_RANK_API, params, retries=2, timeout=8, headers=SINA_HEADERS)
+    rows = []
+    for it in data or []:
+        sym = str(it.get("symbol") or "")
+        if not sym.startswith(("sh", "sz")):
+            continue  # 过滤北交所 bj 代码
+        price = _num(it, "trade")
+        if not price or price <= 0:
+            continue
+        code = str(it.get("code") or "")
+        market = "1." if sym.startswith("sh") else "0."
+        vol = _num(it, "volume")
+        cap = _num(it, "mktcap")
+        rows.append({
+            "rank": len(rows) + 1,
+            "code": code, "name": it.get("name") or code, "secid": market + code,
+            "price": price,
+            "change_pct": _num(it, "changepercent"), "change": _num(it, "pricechange"),
+            "volume": (vol / 100) if vol is not None else None,     # 股 → 手
+            "amount": _num(it, "amount"),
+            "turnover": _num(it, "turnoverratio"),
+            "volratio": None, "pe": _num(it, "per"), "pb": _num(it, "pb"),
+            "mktcap": (cap * 1e4) if cap is not None else None,     # 万元 → 元
+        })
+    return rows
+
+
+def _fetch_fflow_sina(secid, days):
+    """新浪个股资金流历史备源（MoneyFlow.ssl_qsfx_lscjfb）。
+
+    字段：opendate日期 / netamount主力净流入 / r0_net超大单 / r1_net大单 /
+    r2_net中单 / r3_net小单（单位元，与东财一致，且 r0+r1+r2+r3=netamount）；
+    changeratio 为小数涨跌幅（×100）。
+    """
+    if not secid.startswith(("1.", "0.")):
+        return []
+    prefix, code = secid.split(".")
+    symbol = ("sh" if prefix == "1" else "sz") + code
+    params = {"page": 1, "num": min(max(days, 5), 100), "sort": "opendate",
+              "asc": 0, "daima": symbol}
+    data = get_json(SINA_FFLOW_API, params, retries=2, timeout=8, headers=SINA_HEADERS)
+    items = []
+    for it in data or []:
+        main = _num(it, "netamount")
+        if main is None:
+            continue
+        chg = _num(it, "changeratio")
+        items.append({
+            "date": str(it.get("opendate") or ""),
+            "main": main,
+            "small": _num(it, "r3_net"), "mid": _num(it, "r2_net"),
+            "big": _num(it, "r1_net"), "xbig": _num(it, "r0_net"),
+            "close": _num(it, "trade"),
+            "change_pct": round(chg * 100, 2) if chg is not None else None,  # 小数 → %
+        })
+    items = [it for it in items if it["date"]]
+    items.reverse()  # 新浪最新在前 → 日期升序
+    return items
+
+
+def fetch_leaderboard(kind="up", size=100):
+    """沪深A股排行榜，三级数据源：东财 clist（主）→ 新浪 getHQNodeData（备）→
+    磁盘缓存（兜底）。
+
+    kind: up=涨幅榜 / down=跌幅榜 / amount=成交额 / turnover=换手率 / volratio=量比
+    （量比榜新浪无此字段，仅东财 + 缓存）。
+    60 秒内存缓存 + 磁盘缓存兜底（接口失败时返回上次成功数据，标注 cached=true）。
     """
     key = f"lb_{kind}"
     now = time.time()
@@ -1192,41 +1286,49 @@ def fetch_leaderboard(kind="up", size=100):
         cached = _leaderboard_cache["data"].get(key)
         if cached:
             return cached
-    fid = {"up": "f3", "down": "f3", "amount": "f6",
-           "turnover": "f8", "volratio": "f10"}.get(kind, "f3")
-    po = 0 if kind == "down" else 1  # down=升序（跌幅榜）
-    params = {
-        "pn": 1, "pz": size, "po": po, "np": 1, "fltt": 2, "invt": 2,
-        "fid": fid, "fs": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23",
-        "fields": "f2,f3,f4,f5,f6,f8,f9,f10,f12,f13,f14,f15,f16,f17,f18,f20,f21,f23",
-    }
     rows = []
     total = 0
+    source = ""
+    # 源1：东财（含量比/PE/PB/市值）
     try:
+        fid = {"up": "f3", "down": "f3", "amount": "f6",
+               "turnover": "f8", "volratio": "f10"}.get(kind, "f3")
+        po = 0 if kind == "down" else 1  # down=升序（跌幅榜）
+        params = {
+            "pn": 1, "pz": size, "po": po, "np": 1, "fltt": 2, "invt": 2,
+            "fid": fid, "fs": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23",
+            "fields": "f2,f3,f4,f5,f6,f8,f9,f10,f12,f13,f14,f15,f16,f17,f18,f20,f21,f23",
+        }
         data = get_json(CLIST_API, params, retries=3, timeout=8).get("data") or {}
         diff = data.get("diff") or []
         total = data.get("total") or len(diff)
         for it in diff:
-            def num(k):
-                try:
-                    return float(it.get(k))
-                except (TypeError, ValueError):
-                    return None
             code = str(it.get("f12") or "")
             market = it.get("f13")
             secid = (("1." if market == 1 else "0.") + code) if code else ""
             rows.append({
                 "rank": len(rows) + 1,
                 "code": code, "name": it.get("f14") or code, "secid": secid,
-                "price": num("f2"), "change_pct": num("f3"), "change": num("f4"),
-                "volume": num("f5"), "amount": num("f6"), "turnover": num("f8"),
-                "volratio": num("f10"), "pe": num("f9"), "pb": num("f23"),
-                "mktcap": num("f20"), "float_mktcap": num("f21"),
+                "price": _num(it, "f2"), "change_pct": _num(it, "f3"), "change": _num(it, "f4"),
+                "volume": _num(it, "f5"), "amount": _num(it, "f6"), "turnover": _num(it, "f8"),
+                "volratio": _num(it, "f10"), "pe": _num(it, "f9"), "pb": _num(it, "f23"),
+                "mktcap": _num(it, "f20"), "float_mktcap": _num(it, "f21"),
             })
+        if rows:
+            source = "eastmoney"
     except Exception as exc:
         print(f"[leaderboard] 东财接口失败({kind}): {exc}")
+    # 源2：新浪（无量比）
+    if not rows:
+        try:
+            rows = _fetch_leaderboard_sina(kind)
+            if rows:
+                total = len(rows)
+                source = "sina"
+        except Exception as exc:
+            print(f"[leaderboard] 新浪接口失败({kind}): {exc}")
     if rows:
-        res = {"kind": kind, "total": total, "items": rows, "cached": False}
+        res = {"kind": kind, "total": total, "items": rows, "cached": False, "source": source}
         _leaderboard_cache["ts"] = now
         _leaderboard_cache["data"][key] = res
         _disk_cache_set(key, res)
@@ -1241,11 +1343,11 @@ def fetch_leaderboard(kind="up", size=100):
 
 
 def fetch_fflow(secid, days=30):
-    """个股历史资金流（东财 fflow 日K）。返回日期升序列表，单位：元。
+    """个股历史资金流，三级数据源：东财 fflow 日K（主）→ 新浪 MoneyFlow（备）→
+    磁盘缓存（兜底）。返回日期升序列表，单位：元。
 
-    字段：f51日期 f52主力净流入 f53小单 f54中单 f55大单 f56超大单
-          f62收盘价 f63涨跌幅。60 秒内存缓存 + 磁盘缓存兜底（接口失败时
-          返回上次成功数据，标注 cached=true）。
+    东财字段：f51日期 f52主力净流入 f53小单 f54中单 f55大单 f56超大单
+              f62收盘价 f63涨跌幅。60 秒内存缓存 + 磁盘缓存兜底。
     """
     days = max(5, min(120, int(days)))
     key = f"fflow_{secid}_{days}"
@@ -1254,13 +1356,15 @@ def fetch_fflow(secid, days=30):
         cached = _fflow_cache["data"].get(key)
         if cached:
             return cached
-    params = {
-        "lmt": days, "klt": "101", "secid": secid,
-        "fields1": "f1,f2,f3,f7",
-        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63",
-    }
     items = []
+    source = ""
+    # 源1：东财
     try:
+        params = {
+            "lmt": days, "klt": "101", "secid": secid,
+            "fields1": "f1,f2,f3,f7",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63",
+        }
         data = get_json(FFLOW_API, params, retries=3, timeout=8).get("data") or {}
         klines = data.get("klines") or []
         for line in klines:
@@ -1281,10 +1385,20 @@ def fetch_fflow(secid, days=30):
             })
         items = [it for it in items if it["date"]]
         items.reverse()  # 东财返回倒序 → 日期升序
+        if items:
+            source = "eastmoney"
     except Exception as exc:
         print(f"[fflow] 东财接口失败({secid}): {exc}")
+    # 源2：新浪
+    if not items:
+        try:
+            items = _fetch_fflow_sina(secid, days)
+            if items:
+                source = "sina"
+        except Exception as exc:
+            print(f"[fflow] 新浪接口失败({secid}): {exc}")
     if items:
-        res = {"secid": secid, "days": days, "items": items, "cached": False}
+        res = {"secid": secid, "days": days, "items": items, "cached": False, "source": source}
         _fflow_cache["ts"] = now
         _fflow_cache["data"][key] = res
         _disk_cache_set(key, res)
@@ -1296,6 +1410,35 @@ def fetch_fflow(secid, days=30):
         stale["data"]["cache_ts"] = time.strftime("%m-%d %H:%M", time.localtime(stale.get("ts") or 0))
         return stale["data"]
     raise ConnectionError("资金流数据源请求失败，且无可用缓存")
+
+
+def _prefetch_rank_cache():
+    """启动后后台预取排行榜 5 类缓存（东财失败自动走新浪）。
+
+    保证打开排行榜板块时有数据可用；失败静默，不影响启动。
+    """
+    def work():
+        for kind in ("up", "down", "amount", "turnover", "volratio"):
+            try:
+                fetch_leaderboard(kind)
+                print(f"[cache] 排行榜预取成功: {kind}")
+            except Exception as exc:
+                print(f"[cache] 排行榜预取失败({kind}): {exc}")
+    threading.Thread(target=work, daemon=True).start()
+
+
+def _cache_refresh_loop():
+    """后台定时刷新排行榜缓存（每 2 小时一次，覆盖每日数据更新）。"""
+    def loop():
+        while True:
+            time.sleep(7200)
+            for kind in ("up", "down", "amount", "turnover", "volratio"):
+                try:
+                    _leaderboard_cache["ts"] = 0.0  # 绕过 60s 内存缓存，强制重新请求
+                    fetch_leaderboard(kind)
+                except Exception:
+                    pass
+    threading.Thread(target=loop, daemon=True).start()
 
 
 _AI_KEY = None
@@ -2196,6 +2339,8 @@ def main():
     db.session_cleanup()  # 清理过期会话（防 sessions 表无限增长）
     print(f"[i] 数据库: {db.db_info()['db_path']}")
     _backup_db_on_start()  # 启动时自动备份数据库（防更新覆盖/误删）
+    _prefetch_rank_cache()  # 后台预取排行榜缓存（东财→新浪，保证打开即有数据）
+    _cache_refresh_loop()   # 后台每 2 小时刷新排行榜缓存
 
     # 监听地址/端口：环境变量可覆盖（云部署用 STOCK_HOST=0.0.0.0 STOCK_PORT=8000）
     host = os.environ.get("STOCK_HOST", "127.0.0.1")

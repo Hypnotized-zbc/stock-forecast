@@ -581,7 +581,7 @@ const I18N = {
     stDistTitle: "日收益率分布", stDistSub: "共 {n} 个交易日", stHistDay: "天数",
     stStockPh: "输入股票名称/代码查询统计", wlQuickTitle: "自选股（点击切换资金流）",
     wlQuickTitle2: "自选股（点击切换统计）", ffCacheTip: "（缓存数据 · 更新于 {ts}）",
-    ffRetry: "重试", ffNoCache: "数据源请求失败且无缓存，请稍后重试",
+    ffRetry: "重试", ffNoCache: "数据源请求失败且无缓存，请稍后重试", dataSrcSina: "新浪源",
   },
   en: {
     appTitle: "Stock History Data Query", queryLabel: "Search stock:", phStock: "Name or code, e.g. 601088 / China Shenhua / 600519",
@@ -661,7 +661,7 @@ const I18N = {
     stDistTitle: "Daily return distribution", stDistSub: "{n} trading days", stHistDay: "Days",
     stStockPh: "Enter stock name/code for statistics", wlQuickTitle: "Watchlist (click to switch fund flow)",
     wlQuickTitle2: "Watchlist (click to switch stats)", ffCacheTip: " (cached · updated {ts})",
-    ffRetry: "Retry", ffNoCache: "Data source failed and no cache, try later",
+    ffRetry: "Retry", ffNoCache: "Data source failed and no cache, try later", dataSrcSina: "Sina",
   }
 };
 let _lang = "zh";
@@ -3417,7 +3417,8 @@ async function loadLeaderboard() {
     if (data.error) { body.innerHTML = "<tr><td colspan='12' style='text-align:center;color:#c0392b'>" + esc(data.error) + "</td></tr>"; return; }
     _lbData = data;
     renderLeaderboard();
-    document.getElementById("lbTs").textContent = fmtTime(Date.now());
+    document.getElementById("lbTs").textContent = fmtTime(Date.now()) +
+      (_lbData.source === "sina" ? " · [" + t("dataSrcSina") + "]" : "");
   } catch (e) {
     body.innerHTML = "<tr><td colspan='12' style='text-align:center;color:#c0392b'>" + esc(t("stReqErr")) + esc(e) + "</td></tr>";
   }
@@ -3511,6 +3512,9 @@ async function loadFflow(secid, name) {
     _ffData = data.items;
     _ffName = name || secid;
     let title = esc(_ffName) + " · " + t("ffOk").replace("{days}", data.days);
+    if (data.source === "sina") {
+      title += " <span style='color:#6b7280;font-weight:400;font-size:12px'>[" + esc(t("dataSrcSina")) + "]</span>";
+    }
     if (data.cached) {
       const ts = data.cache_ts || "";
       title += "<span style='color:#f59e0b;font-weight:400;font-size:12px'> " +
