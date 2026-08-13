@@ -109,6 +109,7 @@
             border: 1px solid #c7d2fe; border-radius: 6px; background: #eef2ff;
             color: #3730a3; cursor: pointer; }
   .wl-add:hover { background: #e0e7ff; }
+  .cand-row { display: inline-flex; align-items: center; margin-right: 8px; }
   .wl-bar { max-width: 1180px; margin: 8px auto 0; background: #fff; border-radius: 10px;
             box-shadow: 0 2px 8px rgba(0,0,0,.06); padding: 10px 14px; }
   .wl-head { font-size: 13px; color: #999; margin-bottom: 6px; }
@@ -265,7 +266,7 @@
 <div class="header">
   <!-- 新用户引导条（登录后首次显示，可关闭） -->
   <div id="guideBar" style="display:none;background:#eef2ff;border:1px solid #c7d2fe;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:13px;color:#3730a3">
-    <span data-i18n="guideText">👋 使用步骤：① 上方搜索股票 → ② 候选旁点 ＋ 加入自选 → ③ 点击自选股查看 K 线与预测。实时行情每 30 秒自动刷新。</span>
+    <span data-i18n="guideText">👋 使用步骤：① 上方搜索股票 → ② 候选旁点「加入自选股」→ ③ 点击自选股查看 K 线与预测。实时行情每 30 秒自动刷新。</span>
     <button id="guideClose" style="margin-left:10px;padding:2px 10px;border:1px solid #c7d2fe;border-radius:6px;background:#fff;cursor:pointer;font-size:12px" data-i18n="guideClose">知道了</button>
   </div>
   <div class="query-row">
@@ -514,7 +515,7 @@ const I18N = {
     cmpTitle: "多股归一化对比（以所选范围首日收盘 = 100）", cmpRange: "日期范围：",
     cmpGo: "生成对比图", cmpClose: "关闭",
     pleaseLogin: "请登录", loginFirst: "登录后查看自选股（实时行情随账号云端同步）",
-    wlEmpty: "自选股（查询候选旁点 ＋ 添加）", wlTsPrefix: "自选股实时行情 · ",
+    wlEmpty: "自选股（查询候选旁点「加入自选股」添加）", wlTsPrefix: "自选股实时行情 · ",
     wlRefresh: "🔄 刷新", wlRefresh10s: "刷新(10s)", wlRefreshTick: "s",
     wlHeadName: "名称", wlHeadPrice: "最新价", wlHeadChg: "涨跌幅", wlHeadPrev: "昨收",
     wlHeadPe: "PE", wlHeadPb: "PB", wlHeadCap: "总市值", wlHeadChart: "图表",
@@ -522,10 +523,10 @@ const I18N = {
     wlStateFail: "获取失败", wlStatePending: "待获取",
     wlUpdated: "自选股实时行情 · 更新于 ", wlEvery30s: "每30秒统一刷新",
     stSearchEmpty: "请输入股票名称或代码", stSearching: "搜索中...", stSearchFail: "搜索失败: ",
-    stNotFound: "未找到该股票", stCandidatesPre: "找到 ", stCandidates: " 个候选，点选一个（＋加入自选）：", stReqErr: "请求异常: ",
+    stNotFound: "未找到该股票", stCandidatesPre: "找到 ", stCandidates: " 个候选，点选查看，或点「加入自选股」：", stReqErr: "请求异常: ",
     stQuoteFail: "实时行情获取失败，30 秒后自动重试", stQuoted: "行情已更新 ",
     stDone: "完成", stLoginFirstAdd: "请先登录后再添加自选股", stAlreadyIn: "已在自选中",
-    stAdded: "已加入自选: ", stDownloading: "，正在下载数据...", stSynced: "已将本机 ", stSynced2: " 只自选股同步到账号 ",
+    stAddWatch: "加入自选股", stAdded: "已加入自选: ", stDownloading: "，正在下载数据...", stSynced: "已将本机 ", stSynced2: " 只自选股同步到账号 ",
     stNetErr: "网络连接异常，正在重试...", stCacheHit: "已用今日缓存数据（无需重新下载）",
     stFetching: " 数据中（约需 10~30 秒）...", stFetchFail: "下载失败: ", stTimeout: "请求异常或超时: ",
     stTooFast: "刷新太频繁，请稍后再试", stRefreshing: "正在刷新行情...",
@@ -535,7 +536,7 @@ const I18N = {
     stShareShot: "图表截图失败: ", stShareExport: "导出失败: ", stShareRead: "图表图片读取失败",
     stZoomHint: "放大模式：滚轮缩放横轴，左键拖拽平移，单击锁定参考线，右上角 ✕ 关闭",
     stLogout: "退出",
-    guideText: "👋 使用步骤：① 上方搜索股票 → ② 候选旁点 ＋ 加入自选 → ③ 点击自选股查看 K 线与预测。实时行情每 30 秒自动刷新。",
+    guideText: "👋 使用步骤：① 上方搜索股票 → ② 候选旁点「加入自选股」→ ③ 点击自选股查看 K 线与预测。实时行情每 30 秒自动刷新。",
     guideClose: "知道了",
     chgPwd: "修改密码", chgPwdTitle: "修改密码",
     delAcc: "注销账号", delAccTitle: "注销账号", delOk: "确认注销",
@@ -594,7 +595,7 @@ const I18N = {
     cmpTitle: "Normalized Comparison (first-day close of range = 100)", cmpRange: "Date range:",
     cmpGo: "Generate Chart", cmpClose: "Close",
     pleaseLogin: "Please sign in", loginFirst: "Sign in to view watchlist (cloud synced)",
-    wlEmpty: "Watchlist (click ＋ next to candidates to add)", wlTsPrefix: "Watchlist quotes · ",
+    wlEmpty: "Watchlist (click Add to watchlist next to candidates)", wlTsPrefix: "Watchlist quotes · ",
     wlRefresh: "🔄 Refresh", wlRefresh10s: "Refresh(10s)", wlRefreshTick: "s",
     wlHeadName: "Name", wlHeadPrice: "Price", wlHeadChg: "Chg %", wlHeadPrev: "Prev Close",
     wlHeadPe: "PE", wlHeadPb: "PB", wlHeadCap: "Mkt Cap", wlHeadChart: "Chart",
@@ -602,10 +603,10 @@ const I18N = {
     wlStateFail: "Failed", wlStatePending: "Pending",
     wlUpdated: "Watchlist quotes · updated ", wlEvery30s: "refreshes every 30s",
     stSearchEmpty: "Please enter a stock name or code", stSearching: "Searching...", stSearchFail: "Search failed: ",
-    stNotFound: "Stock not found", stCandidatesPre: "Found ", stCandidates: " candidates, click one (＋ to add):", stReqErr: "Request error: ",
+    stNotFound: "Stock not found", stCandidatesPre: "Found ", stCandidates: " candidates, click to view, or press Add to watchlist:", stReqErr: "Request error: ",
     stQuoteFail: "Quote fetch failed, auto-retry in 30s", stQuoted: "Quotes updated ",
     stDone: "Done", stLoginFirstAdd: "Please sign in before adding", stAlreadyIn: "Already in watchlist",
-    stAdded: "Added: ", stDownloading: ", downloading data...", stSynced: "Synced ", stSynced2: " stocks to account ",
+    stAddWatch: "Add to watchlist", stAdded: "Added: ", stDownloading: ", downloading data...", stSynced: "Synced ", stSynced2: " stocks to account ",
     stNetErr: "Network error, retrying...", stCacheHit: "Loaded from today's cache",
     stFetching: " fetching data (10~30s)...", stFetchFail: "Download failed: ", stTimeout: "Request error or timeout: ",
     stTooFast: "Too frequent, please wait", stRefreshing: "Refreshing quotes...",
@@ -615,7 +616,7 @@ const I18N = {
     stShareShot: "Snapshot failed: ", stShareExport: "Export failed: ", stShareRead: "Chart image read failed",
     stZoomHint: "Zoom: wheel to scale X, drag to pan, double-click to pin, ✕ to close",
     stLogout: "Sign out",
-    guideText: "👋 How to use: ① Search a stock above → ② Click ＋ to add to watchlist → ③ Click a watchlist row to view K-line and forecasts. Quotes refresh every 30s.",
+    guideText: "👋 How to use: ① Search a stock above → ② Click Add to watchlist → ③ Click a watchlist row to view K-line and forecasts. Quotes refresh every 30s.",
     guideClose: "Got it",
     chgPwd: "Change Password", chgPwdTitle: "Change Password",
     delAcc: "Delete Account", delAccTitle: "Delete Account", delOk: "Delete",
@@ -1915,7 +1916,7 @@ async function doSearch() {
     if (!data.length) { setStatus(t("stNotFound")); return; }
     box.innerHTML = data.map((c, i) =>
       "<button class='cand' data-i='" + i + "'>" + esc(c["名称"]) + " " + esc(c["代码"]) + " " + esc(c["市场"]) + "</button>" +
-      "<button class='wl-add' data-i='" + i + "' title='加入自选'>＋</button>"
+      "<button class='wl-add' data-i='" + i + "'>" + esc(t("stAddWatch")) + "</button>"
     ).join("");
     window._cands = data;
     setStatus(t("stCandidatesPre") + data.length + t("stCandidates"));
@@ -2237,8 +2238,13 @@ async function loadWatchFromCloud() {
     const d = await cloudGet("/api/watchlist");
     if (d && Array.isArray(d.items)) {
       if (d.items.length) {
-        // 登录后以云端数据为准（账号数据在云端）
-        _watch = d.items.map(it => ({secid: it.secid, name: it.name, code: ""}));
+        // 登录后以云端数据为准 + 合并本地新加（云端响应慢时用户可能已点「加入自选股」）
+        const cloud = d.items.map(it => ({secid: it.secid, name: it.name, code: ""}));
+        const seen = new Set(cloud.map(w => w.secid));
+        for (const w of _watch) {
+          if (w && w.secid && !seen.has(w.secid)) { cloud.push(w); seen.add(w.secid); }
+        }
+        _watch = cloud;
       } else {
         // 云端为空：读取本地 wl（早期未登录时代录入的自选股）迁移到当前账号云端
         let local = [];
@@ -3482,12 +3488,21 @@ async function doStockSearch(inputId, candId, statusId, candKey, onPick) {
     if (!data.length) { status.textContent = t("ffNotFound"); return; }
     window["_" + candKey + "Cands"] = data;
     box.innerHTML = data.map((c, i) =>
-      "<button class='cand' data-i='" + i + "'>" + esc(c["名称"]) + " " + esc(c["代码"]) + "</button>"
+      "<span class='cand-row'>" +
+      "<button class='cand' data-i='" + i + "'>" + esc(c["名称"]) + " " + esc(c["代码"]) + "</button>" +
+      "<button class='wl-add' data-i='" + i + "'>" + esc(t("stAddWatch")) + "</button></span>"
     ).join("");
     box.querySelectorAll(".cand").forEach(btn => {
       btn.addEventListener("click", () => {
         const c = window["_" + candKey + "Cands"][+btn.dataset.i];
         onPick(c);
+      });
+    });
+    // 候选旁"加入自选股"：与行情分析页一致，云同步到账号数据库
+    box.querySelectorAll(".wl-add").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const c = window["_" + candKey + "Cands"][+btn.dataset.i];
+        addWatch(c.secid, c["名称"], c["代码"]);
       });
     });
     status.textContent = "";
