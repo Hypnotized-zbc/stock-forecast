@@ -186,12 +186,12 @@
   .cmp-item input { cursor: pointer; }
   #compareCanvas { width: 100%; background: #fff; border-radius: 8px; margin-top: 10px; }
 
-  /* ---- 顶部导航栏（v0.22.0 板块切换） ---- */
+  /* ---- 顶部导航栏（v0.22.0 板块切换；v0.24.0 两行：标题/登录一行 + 四模块一行） ---- */
   .topnav { max-width: 1180px; margin: 0 auto 12px; background: #fff; border-radius: 10px;
-            box-shadow: 0 2px 8px rgba(0,0,0,.06); padding: 10px 16px;
-            display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+            box-shadow: 0 2px 8px rgba(0,0,0,.06); padding: 10px 16px; }
+  .topnav-top { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
   .topnav .brand { font-size: 18px; font-weight: 700; color: #111827; white-space: nowrap; }
-  .nav-items { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
+  .nav-items { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
   .nav-item { padding: 7px 16px; font-size: 14px; border: 1px solid #d1d5db; background: #fff;
               border-radius: 20px; cursor: pointer; color: #4b5563; transition: all .15s; }
   .nav-item:hover { border-color: #2563eb; color: #2563eb; }
@@ -243,21 +243,23 @@
 </style>
 </head>
 <body>
-<!-- 顶部导航栏：标题 + 板块切换 + 语言/登录（用户要求：不同板块放入栏目，点击切换） -->
+<!-- 顶部导航栏：标题与登录/语言一行，四个大模块单独一行（英文模式英文较长，分行后不挤压） -->
 <div class="topnav">
-  <div class="brand">📈 <span data-i18n="appTitle">股票历史数据查询</span></div>
+  <div class="topnav-top">
+    <div class="brand">📈 <span data-i18n="appTitle">股票历史数据查询</span></div>
+    <div class="nav-right">
+      <div class="lang-switch">
+        <span class="lang-item" data-lang="en">Eng</span>
+        <span class="lang-item active" data-lang="zh">中文</span>
+      </div>
+      <div id="authArea" style="font-size:13px"><span style="color:#9ca3af" data-i18n="pleaseLogin">请登录</span></div>
+    </div>
+  </div>
   <div class="nav-items">
     <button class="nav-item active" data-page="analyze" data-i18n="navAnalyze">行情分析</button>
     <button class="nav-item" data-page="leaderboard" data-i18n="navLeaderboard">排行榜</button>
     <button class="nav-item" data-page="fflow" data-i18n="navFflow">资金流向</button>
     <button class="nav-item" data-page="stats" data-i18n="navStats">历史统计</button>
-  </div>
-  <div class="nav-right">
-    <div class="lang-switch">
-      <span class="lang-item" data-lang="en">Eng</span>
-      <span class="lang-item active" data-lang="zh">中文</span>
-    </div>
-    <div id="authArea" style="font-size:13px"><span style="color:#9ca3af" data-i18n="pleaseLogin">请登录</span></div>
   </div>
 </div>
 
@@ -555,6 +557,9 @@ const I18N = {
     todayPrefix: "今日 ", predRange: "预测区间", fitLegend: "图例（颜色对应上图拟合线）",
     finalPred: "最终预测（RMSE 逆加权平均）", dailyPred: "逐日预测", queryFirst: "请先查询股票",
     fitUnavailable: "模型拟合不可用（数据不足或拟合失败）", aiQueryFirst: "请先查询股票再使用 AI 解读",
+    maeLabel: "平均绝对误差", rmseLabel: "均方根误差", r2Label: "拟合度",
+    mArima: "ARIMA 预测", mEts: "ETS 指数平滑预测", mProphet: "Prophet 预测", mSvr: "SVR 预测", mRf: "随机森林预测",
+    finalLine: "最终预测（加权平均，粗线）", dirUp: "上涨 ↑", dirDown: "下跌 ↓", days10: "10日后",
     tipDate: "日期", tipOpen: "开盘", tipHigh: "最高", tipLow: "最低", tipVol: "成交量",
     tipClose: "收盘", closePrice: "收盘价",
     bollUp: "BOLL上轨", bollMid: "BOLL中轨", bollLow: "BOLL下轨",
@@ -635,6 +640,9 @@ const I18N = {
     todayPrefix: "Today ", predRange: "forecast range", fitLegend: "Legend (colors match lines above)",
     finalPred: "Final Forecast (RMSE inverse-weighted)", dailyPred: "Daily Forecast", queryFirst: "Query a stock first",
     fitUnavailable: "Model fit unavailable (insufficient data or fitting failed)", aiQueryFirst: "Query a stock before using AI insight",
+    maeLabel: "Mean Absolute Error", rmseLabel: "Root Mean Square Error", r2Label: "Fit",
+    mArima: "ARIMA Forecast", mEts: "ETS Forecast", mProphet: "Prophet Forecast", mSvr: "SVR Forecast", mRf: "RF Forecast",
+    finalLine: "Final Forecast (weighted avg, bold)", dirUp: "Up ↑", dirDown: "Down ↓", days10: "in 10 days",
     tipDate: "Date", tipOpen: "Open", tipHigh: "High", tipLow: "Low", tipVol: "Volume",
     tipClose: "Close", closePrice: "Close",
     bollUp: "BOLL Up", bollMid: "BOLL Mid", bollLow: "BOLL Low",
@@ -1000,6 +1008,16 @@ const FIT_COLORS = {arima: "#dc2626", ets: "#16a34a", prophet: "#f59e0b",
                     svr: "#8b5cf6", rf: "#06b6d4"};
 const FIT_ORDER = ["arima", "ets", "prophet", "svr", "rf"];
 
+// 模型显示名：英文界面统一映射为英文（含旧缓存中文名兜底）；中文界面用后端原名
+function modelDisplayName(k, m) {
+  const raw = (m && m.name) || k;
+  if (_lang !== "en") return raw;
+  const EN = {arima: "ARIMA(1,1,0)+drift", ets: "ETS", prophet: "Prophet(light)", svr: "SVR(RBF)", rf: "RF(light)"};
+  if (!EN[k]) return raw;
+  const a = (raw.match(/α=([\d.]+)/) || [])[1];
+  return a ? EN[k] + "(α=" + a + ")" : EN[k];
+}
+
 function drawFit() {
   ctx.clearRect(0, 0, W, H);  // 先清空画布，避免残留上一张图（如 K 线）
   if (!D || !n) { paint(currentType); return; }
@@ -1029,7 +1047,7 @@ function drawFit() {
   let lg = "<span><i style='color:#111827'>—</i> " + t("tipRealClose") + "</span>";
   if (D.fit) {
     for (const k of FIT_ORDER) {
-      if (D.fit[k]) lg += "<span><i style='color:"+FIT_COLORS[k]+"'>—</i> "+D.fit[k].name+"</span>";
+      if (D.fit[k]) lg += "<span><i style='color:"+FIT_COLORS[k]+"'>—</i> "+modelDisplayName(k, D.fit[k])+"</span>";
     }
   }
   legend(lg);
@@ -1043,21 +1061,20 @@ function renderFitPanel() {
     body.innerHTML = "<div style='color:#999'>" + t("fitUnavailable") + "</div>";
     return;
   }
-  const order = [["arima", "ARIMA 拟合"], ["ets", "ETS 指数平滑"],
-                 ["prophet", "Prophet 拟合"], ["svr", "SVR 拟合"],
-                 ["rf", "随机森林拟合"]];
+  const order = ["arima", "ets", "prophet", "svr", "rf"];
+  const col = _lang === "en" ? ": " : "：";
   // 图例：颜色对应上图各拟合线
   let html = "<div class='f-pred-title'>" + t("fitLegend") + "</div>";
   html += "<div class='f-row'><span class='f-name'><span class='swatch' style='background:#111827'></span>" + t("tipRealClose") + "</span></div>";
-  for (const [k, title] of order) {
+  for (const k of order) {
     const m = D.fit[k];
     if (!m) continue;
     html +=
-      "<div class='f-row'><span class='f-name'><span class='swatch' style='background:"+FIT_COLORS[k]+"'></span>"+m.name+"</span></div>" +
+      "<div class='f-row'><span class='f-name'><span class='swatch' style='background:"+FIT_COLORS[k]+"'></span>"+modelDisplayName(k, m)+"</span></div>" +
       "<div class='f-metrics'>" +
-      "<div>MAE 平均绝对误差：<b>"+m.mae+"</b></div>" +
-      "<div>RMSE 均方根误差：<b>"+m.rmse+"</b></div>" +
-      "<div>R² 拟合度：<b>"+m.r2+"</b></div>" +
+      "<div>MAE " + t("maeLabel") + col + "<b>"+m.mae+"</b></div>" +
+      "<div>RMSE " + t("rmseLabel") + col + "<b>"+m.rmse+"</b></div>" +
+      "<div>R² " + t("r2Label") + col + "<b>"+m.r2+"</b></div>" +
       "</div>";
     // 未来预测已移至独立「未来预测」视图，这里不再重复展示
   }
@@ -1076,10 +1093,10 @@ function drawFuture() {
   if (!D || !D.fit || !D.fit.arima || !D.fit.arima.predict) return;
   const lastClose = D.closes[D.closes.length-1];
   const models = [["ARIMA(1,1,0)", D.fit.arima, "#dc2626"],
-                  ["ETS 指数平滑", D.fit.ets, "#16a34a"],
-                  ["Prophet(轻量)", D.fit.prophet, "#f59e0b"],
-                  ["SVR(核岭)", D.fit.svr, "#8b5cf6"],
-                  ["随机森林", D.fit.rf, "#06b6d4"]];
+                  ["ETS", D.fit.ets, "#16a34a"],
+                  ["Prophet(light)", D.fit.prophet, "#f59e0b"],
+                  ["SVR(RBF)", D.fit.svr, "#8b5cf6"],
+                  ["RF(light)", D.fit.rf, "#06b6d4"]];
   const m = 10;  // 未来 10 日
   const dates = D.fit.arima.predict_dates || [];
   const padL = 70, padR = 24, padT = 60, padB = 46;
@@ -1297,20 +1314,22 @@ function renderFuturePanel() {
     return;
   }
   const lastClose = D.closes[D.closes.length-1];
+  const L = _lang === "en";  // 英文界面用半角标点
+  const lc = L ? " (" : "（", rc = L ? ")" : "）", sep = L ? ", " : "，", bar = L ? " | " : " ｜ ";
   // 图例：色块 + 模型名（同模型拟合板块样式），颜色对应上图预测线
   let html = "<div class='f-pred-title'>" + t("fitLegend") + "</div>";
-  html += "<div class='f-row'><span class='f-name'><span style='display:inline-block;width:18px;height:0;border-top:3px dashed #111827;vertical-align:middle'></span>" + t("tipRealClose") + "（" + t("nowPrice") + " "+lastClose.toFixed(2)+"，" + t("dashLine") + "）</span></div>";
-  const models = [["arima", "ARIMA 预测", "#dc2626"],
-                  ["ets", "ETS 指数平滑预测", "#16a34a"],
-                  ["prophet", "Prophet 预测", "#f59e0b"],
-                  ["svr", "SVR 预测", "#8b5cf6"],
-                  ["rf", "随机森林预测", "#06b6d4"]];
+  html += "<div class='f-row'><span class='f-name'><span style='display:inline-block;width:18px;height:0;border-top:3px dashed #111827;vertical-align:middle'></span>" + t("tipRealClose") + lc + t("nowPrice") + " "+lastClose.toFixed(2)+sep + t("dashLine") + rc + "</span></div>";
+  const models = [["arima", t("mArima"), "#dc2626"],
+                  ["ets", t("mEts"), "#16a34a"],
+                  ["prophet", t("mProphet"), "#f59e0b"],
+                  ["svr", t("mSvr"), "#8b5cf6"],
+                  ["rf", t("mRf"), "#06b6d4"]];
   for (const [k, title, col] of models) {
     if (D.fit[k] && D.fit[k].predict) {
       html += "<div class='f-row'><span class='f-name'><span class='swatch' style='background:"+col+"'></span>"+title+"</span></div>";
     }
   }
-  html += "<div class='f-row'><span class='f-name'><span style='display:inline-block;width:22px;height:6px;background:#111827;vertical-align:middle'></span>最终预测（加权平均，粗线）</span></div>";
+  html += "<div class='f-row'><span class='f-name'><span style='display:inline-block;width:22px;height:6px;background:#111827;vertical-align:middle'></span>" + t("finalLine") + "</span></div>";
   // 最终预测（RMSE 逆加权平均）
   const wp = weightedPredict();
   const lastPred = wp[wp.length-1];
@@ -1319,8 +1338,8 @@ function renderFuturePanel() {
   const p0 = D.fit.arima.predict_dates[0] || "D+1";
   const p9 = D.fit.arima.predict_dates[D.fit.arima.predict_dates.length-1] || "D+10";
   html += "<div class='f-pred-title'>" + t("finalPred") + "</div>";
-  html += "<div class='f-final' style='color:"+(up?UP:DOWN)+"'>"+(up?"上涨 ↑":"下跌 ↓")+" ｜ 10日后 "+lastPred.toFixed(2)+"（"+chg+"%）</div>";
-  html += "<div class='f-pred-title'>" + t("dailyPred") + "（"+p0.slice(5)+" ~ "+p9.slice(5)+"）</div>";
+  html += "<div class='f-final' style='color:"+(up?UP:DOWN)+"'>"+(up?t("dirUp"):t("dirDown"))+bar + t("days10") + " "+lastPred.toFixed(2)+" ("+chg+"%)</div>";
+  html += "<div class='f-pred-title'>" + t("dailyPred") + lc + p0.slice(5) + " ~ " + p9.slice(5) + rc + "</div>";
   for (let i = 0; i < wp.length; i++) {
     const dt = D.fit.arima.predict_dates[i] ? D.fit.arima.predict_dates[i].slice(5) : ("D+"+(i+1));
     const dv = ((wp[i] - lastClose) / lastClose * 100);
@@ -1360,7 +1379,7 @@ function paint(type) {
   ctx.clearRect(0, 0, W, H);
   if (!D || !n) {
     ctx.fillStyle = "#bbb"; ctx.font = "14px sans-serif"; ctx.textAlign = "center";
-    ctx.fillText("请先在上方输入股票名称查询", W/2, H/2);
+    ctx.fillText(t("queryFirst"), W/2, H/2);
     return;
   }
   if (type=="kline" || type=="kline-week" || type=="kline-month") { _indFirstIdx = null; drawKline(); }
