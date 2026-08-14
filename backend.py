@@ -84,10 +84,12 @@ API_CACHE_DIR = Path(__file__).resolve().parent / "data" / "api_cache"
 
 
 def _disk_cache_get(key, max_age=86400):
-    """读磁盘缓存；超过 max_age 秒（默认 1 天）视为过期并删除文件。
+    """读磁盘缓存；超过 max_age 秒（默认 1 天）视为过期，返回 None。
 
-    当日缓存策略：今天获取过的资金流/排行榜直接用，不再请求数据源；
-    跨天后旧缓存删除（防冗余），重新获取并落盘。
+    当日缓存策略：今天获取过的资金流/排行榜直接用，不再请求数据源；跨天视为过期。
+    **不在读取时删除文件**——删除交给写入覆盖（_disk_cache_set 同名覆盖）与启动清理
+    （_disk_cache_cleanup）。这样接口全挂时 _disk_cache_get_any 还能读到过期缓存做最后兜底，
+    而不是报"无可用缓存"。
     返回缓存对象（含 ts）；不存在/过期/损坏返回 None。
     """
     try:
@@ -97,7 +99,6 @@ def _disk_cache_get(key, max_age=86400):
             if obj and "data" in obj:
                 if time.time() - obj.get("ts", 0) <= max_age:
                     return obj
-                p.unlink()  # 过期即删，防冗余
     except Exception:
         pass
     return None
@@ -116,6 +117,19 @@ def _disk_cache_cleanup(max_age=86400):
                 p.unlink()
     except Exception:
         pass
+
+
+def _disk_cache_get_any(key):
+    """读磁盘缓存，不校验时效（接口全挂时的最后兜底，可能过期，调用方标注 stale）。"""
+    try:
+        p = API_CACHE_DIR / f"{key}.json"
+        if p.exists():
+            obj = json.loads(p.read_text(encoding="utf-8"))
+            if obj and "data" in obj:
+                return obj
+    except Exception:
+        pass
+    return None
 
 
 def _disk_cache_set(key, data):
@@ -1234,7 +1248,7 @@ def _fetch_leaderboard_sina(kind):
     asc = 1 if kind == "down" else 0  # down=升序（跌幅榜）
     params = {"page": 1, "num": 100, "sort": sort, "asc": asc,
               "node": "hs_a", "symbol": "", "_s_r_a": "init"}
-    data = get_json(SINA_RANK_API, params, retries=2, timeout=8, headers=SINA_HEADERS)
+    data = get_json(SINA_RANK_API, params, retries=2, timeout=6, headers=SINA_HEADERS)
     rows = []
     for it in data or []:
         sym = str(it.get("symbol") or "")
@@ -1274,7 +1288,7 @@ def _fetch_fflow_sina(secid, days):
     symbol = ("sh" if prefix == "1" else "sz") + code
     params = {"page": 1, "num": min(max(days, 5), 100), "sort": "opendate",
               "asc": 0, "daima": symbol}
-    data = get_json(SINA_FFLOW_API, params, retries=2, timeout=8, headers=SINA_HEADERS)
+    data = get_json(SINA_FFLOW_API, params, retries=2, timeout=6, headers=SINA_HEADERS)
     items = []
     for it in data or []:
         main = _num(it, "netamount")
@@ -1327,7 +1341,7 @@ def fetch_leaderboard(kind="up", size=100):
             "fid": fid, "fs": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23",
             "fields": "f2,f3,f4,f5,f6,f8,f9,f10,f12,f13,f14,f15,f16,f17,f18,f20,f21,f23",
         }
-        data = get_json(CLIST_API, params, retries=3, timeout=8).get("data") or {}
+        data = get_json(CLIST_API, params, retries=1, timeout=5).get("data") or {}
         diff = data.get("diff") or []
         total = data.get("total") or len(diff)
         for it in diff:
@@ -1361,10 +1375,12 @@ def fetch_leaderboard(kind="up", size=100):
         _leaderboard_cache["data"][key] = res
         _disk_cache_set(key, res)
         return res
-    # 兜底：磁盘缓存（上次成功数据，可能过期，标注 cached）
-    stale = _disk_cache_get(key)
+    # 兜底：磁盘缓存（当日有效的已在上方直接返回；这里读任何缓存，
+    # 命中必是过期缓存，标注 cached + stale——接口全挂时也不报"无可用缓存"）
+    stale = _disk_cache_get_any(key)
     if stale and stale.get("data", {}).get("items"):
         stale["data"]["cached"] = True
+        stale["data"]["stale"] = True
         stale["data"]["cache_ts"] = time.strftime("%m-%d %H:%M", time.localtime(stale.get("ts") or 0))
         return stale["data"]
     raise ConnectionError("排行榜数据源请求失败，且无可用缓存")
@@ -1399,7 +1415,7 @@ def fetch_fflow(secid, days=30):
             "fields1": "f1,f2,f3,f7",
             "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63",
         }
-        data = get_json(FFLOW_API, params, retries=3, timeout=8).get("data") or {}
+        data = get_json(FFLOW_API, params, retries=1, timeout=5).get("data") or {}
         klines = data.get("klines") or []
         for line in klines:
             f = line.split(",")
@@ -1437,10 +1453,12 @@ def fetch_fflow(secid, days=30):
         _fflow_cache["data"][key] = res
         _disk_cache_set(key, res)
         return res
-    # 兜底：磁盘缓存（上次成功数据，可能过期，标注 cached）
-    stale = _disk_cache_get(key)
+    # 兜底：磁盘缓存（当日有效的已在上方直接返回；这里读任何缓存，
+    # 命中必是过期缓存，标注 cached + stale——接口全挂时也不报"无可用缓存"）
+    stale = _disk_cache_get_any(key)
     if stale and stale.get("data", {}).get("items"):
         stale["data"]["cached"] = True
+        stale["data"]["stale"] = True
         stale["data"]["cache_ts"] = time.strftime("%m-%d %H:%M", time.localtime(stale.get("ts") or 0))
         return stale["data"]
     raise ConnectionError("资金流数据源请求失败，且无可用缓存")
@@ -1482,23 +1500,42 @@ def _get_ai_key():
     return _AI_KEY
 
 
-def ai_insight(secid, name, recent):
-    """基于最近 N 日行情数据调用 DeepSeek 生成简短中文技术面解读。"""
+def ai_insight(secid, name, recent, lang="zh"):
+    """基于最近 N 日行情数据调用 DeepSeek 生成简短技术面解读。
+
+    lang: "zh" 输出中文 / "en" 输出英文（prompt 与要求语言一致）。
+    """
     key = _get_ai_key()
     if not key:
         return {"error": "未配置 DeepSeek API Key（设置环境变量 DEEPSEEK_API_KEY 或在项目目录 llm_key.txt 中填写）"}
+    is_en = lang == "en"
     lines = []
     for r in recent:
-        lines.append(
-            f"{r.get('d', '')} 开{r.get('o', '')} 收{r.get('c', '')} "
-            f"高{r.get('h', '')} 低{r.get('l', '')} 涨跌{r.get('ch', '')}%"
+        if is_en:
+            lines.append(
+                f"{r.get('d', '')} O{r.get('o', '')} C{r.get('c', '')} "
+                f"H{r.get('h', '')} L{r.get('l', '')} Chg{r.get('ch', '')}%"
+            )
+        else:
+            lines.append(
+                f"{r.get('d', '')} 开{r.get('o', '')} 收{r.get('c', '')} "
+                f"高{r.get('h', '')} 低{r.get('l', '')} 涨跌{r.get('ch', '')}%"
+            )
+    if is_en:
+        prompt = (
+            "You are an A-share technical analyst. Below is the recent 20 trading days "
+            f"price data of a stock ({name}, code {secid}):\n" + "\n".join(lines) +
+            "\nGive a concise 3-5 sentence technical analysis in English: trend direction, "
+            "key support/resistance levels, volume-price characteristics, short-term risk. "
+            "Do not recommend buying or selling. No tables."
         )
-    prompt = (
-        "你是一名 A 股技术分析师。以下是一支股票最近 20 个交易日的行情数据"
-        f"（{name}，代码 {secid}）：\n" + "\n".join(lines) +
-        "\n请用 3~5 句简洁中文给出技术面解读：趋势方向、关键支撑/压力位、"
-        "量价特征、短期风险提示。不要推荐买卖，不要用表格。"
-    )
+    else:
+        prompt = (
+            "你是一名 A 股技术分析师。以下是一支股票最近 20 个交易日的行情数据"
+            f"（{name}，代码 {secid}）：\n" + "\n".join(lines) +
+            "\n请用 3~5 句简洁中文给出技术面解读：趋势方向、关键支撑/压力位、"
+            "量价特征、短期风险提示。不要推荐买卖，不要用表格。"
+        )
     try:
         last_err = None
         for attempt in range(1, 4):  # 最多 3 次，指数退避，提高成功率
@@ -1884,6 +1921,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/insight":
                 secid = (params.get("secid") or [""])[0].strip()
                 name = (params.get("name") or [""])[0].strip()
+                lang = (params.get("lang") or ["zh"])[0].strip() or "zh"
                 try:
                     recent = json.loads((params.get("recent") or ["[]"])[0])
                 except (ValueError, TypeError):
@@ -1891,7 +1929,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not secid or not recent:
                     self._send_json({"error": "缺少参数 secid/recent"}, 400)
                     return
-                self._send_json(ai_insight(secid, name, recent))
+                self._send_json(ai_insight(secid, name, recent, lang))
             elif path == "/api/watchlist":
                 uid, uname = _auth_user(self.headers)
                 if uid is None:
@@ -1925,7 +1963,11 @@ class Handler(BaseHTTPRequestHandler):
                     size = int((params.get("size") or ["100"])[0])
                 except ValueError:
                     size = 100
-                self._send_json(fetch_leaderboard(kind, max(10, min(200, size))))
+                try:
+                    self._send_json(fetch_leaderboard(kind, max(10, min(200, size))))
+                except ConnectionError:
+                    # 三级数据源（东财→新浪→磁盘缓存）全部失败：返回错误码，前端映射双语文案
+                    self._send_json({"error": "lb_unavailable"}, 503)
             elif path == "/api/fflow":
                 secid = (params.get("secid") or [""])[0].strip()
                 if not secid:
@@ -1935,9 +1977,13 @@ class Handler(BaseHTTPRequestHandler):
                     days = int((params.get("days") or ["30"])[0])
                 except ValueError:
                     days = 30
-                data = fetch_fflow(secid, days)
+                try:
+                    data = fetch_fflow(secid, days)
+                except ConnectionError:
+                    self._send_json({"error": "ff_unavailable"}, 503)
+                    return
                 if not data["items"]:
-                    self._send_json({"error": "未获取到资金流数据"}, 404)
+                    self._send_json({"error": "ff_unavailable"}, 404)
                     return
                 self._send_json(data)
             elif path == "/api/captcha":
