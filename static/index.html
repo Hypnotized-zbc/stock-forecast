@@ -3671,6 +3671,7 @@ document.querySelectorAll(".lb-tab").forEach(el => {
 // ================= 板块三：资金流向 =================
 let _ffData = null;
 let _ffName = "";
+let _ffSecid = "";  // 当前资金流股票 secid：切换天数（近10/30/60/120日）时自动重新加载
 let _ffMeta = {};  // 资金流元信息（days/source/cached/cache_ts/stale），语言切换重渲染用
 
 // 通用股票搜索（资金流向/历史统计板块共用）：输入 → /api/search → 候选按钮
@@ -3726,6 +3727,7 @@ async function loadFflow(secid, name) {
     }
     _ffData = data.items;
     _ffName = name || secid;
+    _ffSecid = secid;  // 记住当前资金流股票：切换天数（近10/30/60/120日）时自动重新加载
     _ffMeta = {days: data.days, source: data.source, cached: data.cached, cache_ts: data.cache_ts, stale: data.stale};
     renderFflowContent();
     document.getElementById("ffStatus").textContent = "";
@@ -3865,6 +3867,10 @@ document.getElementById("ffSearchBtn").addEventListener("click",
   () => doStockSearch("ffStock", "ffCand", "ffStatus", "ff", ffPick));
 document.getElementById("ffStock").addEventListener("keydown", e => {
   if (e.key === "Enter") doStockSearch("ffStock", "ffCand", "ffStatus", "ff", ffPick);
+});
+// 资金流向天数切换（近10/30/60/120日）：立即用当前展示的股票重新加载，无需再次点击自选股
+document.getElementById("ffDays").addEventListener("change", () => {
+  if (_ffSecid) loadFflow(_ffSecid, _ffName);
 });
 
 // 历史统计板块搜索绑定
