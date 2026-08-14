@@ -2207,11 +2207,12 @@ class Handler(BaseHTTPRequestHandler):
                 db.session_delete_user(uid, keep_token=cur_token or None)
                 self._send_json({"ok": True, "message": "密码已修改"})
             elif path == "/api/delete-account":
-                # 注销账号：需登录 + 密保邮箱验证 + 验证码 + 滑块，删除该用户全部数据
+                # 注销账号：需登录 + 密保邮箱 + 登录密码 + 验证码 + 滑块，删除该用户全部数据
                 if uid is None:
                     _send_auth_error(self)
                     return
                 email = (body.get("email") or "").strip().lower()
+                password = body.get("password") or ""
                 captcha_id = (body.get("captcha_id") or "").strip()
                 captcha = (body.get("captcha") or "").strip().upper()
                 if not _verify_slider(body.get("slider_id"),
@@ -2234,6 +2235,12 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 if u["email"] != email:
                     self._send_json({"error": "密保邮箱不正确"}, 400)
+                    return
+                if not password:
+                    self._send_json({"error": "请填写登录密码"}, 400)
+                    return
+                if not verify_password(password, u["password_hash"], u["salt"]):
+                    self._send_json({"error": "密码不正确"}, 400)
                     return
                 # 清内存会话 + 删库 + 删用户数据
                 for tk in [tk for tk, (uid2, _) in _SESSIONS.items() if uid2 == uid]:

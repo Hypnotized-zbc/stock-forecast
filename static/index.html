@@ -505,6 +505,7 @@
     <div style="font-size:16px;font-weight:600;color:#dc2626;margin-bottom:6px" data-i18n="delAccTitle">注销账号</div>
     <div style="font-size:12px;color:#6b7280;margin-bottom:12px" data-i18n="delAccWarn">将永久删除该账号及全部自选股/解读/历史数据，无法恢复。</div>
     <div style="margin-bottom:4px"><input id="delEmail" type="email" style="width:100%;padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;box-sizing:border-box" data-i18n-ph="chgEmailPh" placeholder="密保邮箱（确认身份）"></div>
+    <div style="margin-bottom:4px"><input id="delPassword" type="password" style="width:100%;padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;box-sizing:border-box" data-i18n-ph="delPasswordPh" placeholder="登录密码（确认身份）" autocomplete="off"></div>
     <div style="margin-bottom:4px;display:flex;gap:8px;align-items:center">
       <input id="delCaptcha" type="text" style="flex:1;padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;box-sizing:border-box" data-i18n-ph="phCaptcha" placeholder="验证码" autocomplete="off">
       <img id="delCaptchaImg" title="看不清？点一下换一张" style="height:38px;border-radius:6px;cursor:pointer;border:1px solid #e5e7eb">
@@ -573,6 +574,8 @@ const I18N = {
     chgPwd: "修改密码", chgPwdTitle: "修改密码",
     delAcc: "注销账号", delAccTitle: "注销账号", delOk: "确认注销",
     delAccWarn: "将永久删除该账号及全部自选股/解读/历史数据，无法恢复。",
+    delPasswordPh: "登录密码（确认身份）", delNeedPwd: "请填写登录密码",
+    delConfirmText: "再次确认：注销后将永久清除该账号及全部自选股、AI解读、历史数据，且无法恢复！确定要继续吗？",
     delFillEmail: "请输入密保邮箱", slFail: "验证失败，请重试",
     chgEmailPh: "密保邮箱", chgNewPh: "新密码（8-20 位，含大小写字母和数字）", chgNew2Ph: "确认新密码", eFormat: "邮箱格式不正确",
     phCaptcha: "验证码",
@@ -662,6 +665,8 @@ const I18N = {
     chgPwd: "Change Password", chgPwdTitle: "Change Password",
     delAcc: "Delete Account", delAccTitle: "Delete Account", delOk: "Delete",
     delAccWarn: "This permanently deletes the account and all watchlists/insights/history. Cannot be undone.",
+    delPasswordPh: "Account password (confirm identity)", delNeedPwd: "Please enter your account password",
+    delConfirmText: "Final confirmation: this will permanently delete the account and ALL watchlists, AI insights and history. This CANNOT be undone. Continue?",
     delFillEmail: "Enter security email", slFail: "Verification failed, retry",
     chgEmailPh: "Security email", chgNewPh: "New password (8-20 chars, upper+lower+digit)", chgNew2Ph: "Confirm new password", eFormat: "Invalid email format",
     phCaptcha: "Captcha",
@@ -2615,6 +2620,7 @@ async function loadDelCaptcha() {
 function openDelAcc() {
   document.getElementById("delAccOverlay").style.display = "flex";
   document.getElementById("delEmail").value = "";
+  document.getElementById("delPassword").value = "";
   document.getElementById("delCaptcha").value = "";
   document.getElementById("delMsg").textContent = "";
   document.getElementById("delMsg").style.color = "#c0392b";
@@ -2625,15 +2631,20 @@ function closeDelAcc() {
 }
 function submitDelAcc() {
   const email = document.getElementById("delEmail").value.trim().toLowerCase();
+  const password = document.getElementById("delPassword").value;
   const captcha = document.getElementById("delCaptcha").value.trim();
   const msg = document.getElementById("delMsg");
   if (!email) { msg.textContent = t("delFillEmail"); return; }
   if (!/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(email)) { msg.textContent = t("eFormat"); return; }
+  if (!password) { msg.textContent = t("delNeedPwd"); return; }
   if (!captcha) { msg.textContent = t("needCaptcha"); return; }
+  // 二次确认：输入完成后再提醒数据永久清除，确认后才进入滑块验证
+  if (!confirm(t("delConfirmText"))) return;
   openSlider((info) => doRealDelAcc(info));
 }
 async function doRealDelAcc(sliderInfo) {
   const email = document.getElementById("delEmail").value.trim().toLowerCase();
+  const password = document.getElementById("delPassword").value;
   const captcha = document.getElementById("delCaptcha").value.trim();
   const msg = document.getElementById("delMsg");
   const btn = document.getElementById("delOk");
@@ -2641,7 +2652,7 @@ async function doRealDelAcc(sliderInfo) {
   try {
     const resp = await fetch("/api/delete-account", {
       method: "POST", headers: authHeaders(),
-      body: JSON.stringify({email: email,
+      body: JSON.stringify({email: email, password: password,
                             captcha_id: _delCaptchaId, captcha: captcha,
                             slider_id: sliderInfo ? sliderInfo.id : "",
                             slider_x: sliderInfo ? sliderInfo.x : 0,
