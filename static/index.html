@@ -531,7 +531,7 @@ const I18N = {
     stNetErr: "网络连接异常，正在重试...", stCacheHit: "已用今日缓存数据（无需重新下载）",
     stFetching: " 数据中（约需 10~30 秒）...", stFetchFail: "下载失败: ", stTimeout: "请求异常或超时: ",
     stTooFast: "刷新太频繁，请稍后再试", stRefreshing: "正在刷新行情...",
-    stNoDayCache: "暂无日K缓存，请先打开日K线图", stSelAtLeast: "请至少选择一支股票",
+    stNoDayCache: "暂无日K缓存，请先打开日K线图", stSelAtLeast: "请至少选择一支股票", stCmpFetching: "正在获取对比数据（首次对比自动下载）",
     stCmpNeed2: "对比需要至少 2 支股票（所选日期范围内有数据）", stCmpNone: "暂无可对比的股票（先查询或加入自选股）",
     stShareFirst: "请先查询股票再分享卡片", stShareOk: "卡片已导出为 PNG 图片文件",
     stShareShot: "图表截图失败: ", stShareExport: "导出失败: ", stShareRead: "图表图片读取失败",
@@ -619,7 +619,7 @@ const I18N = {
     stNetErr: "Network error, retrying...", stCacheHit: "Loaded from today's cache",
     stFetching: " fetching data (10~30s)...", stFetchFail: "Download failed: ", stTimeout: "Request error or timeout: ",
     stTooFast: "Too frequent, please wait", stRefreshing: "Refreshing quotes...",
-    stNoDayCache: "No daily cache, open daily K-line first", stSelAtLeast: "Select at least one stock",
+    stNoDayCache: "No daily K-line cache, open daily chart first", stSelAtLeast: "Select at least one stock", stCmpFetching: "Fetching comparison data (first compare auto-downloads)",
     stCmpNeed2: "Comparison needs at least 2 stocks (with data in range)", stCmpNone: "No stocks to compare (query or add first)",
     stShareFirst: "Query a stock before sharing", stShareOk: "Card exported as PNG file",
     stShareShot: "Snapshot failed: ", stShareExport: "Export failed: ", stShareRead: "Chart image read failed",
@@ -702,12 +702,45 @@ function applyLang() {
     el.classList.toggle("active", el.dataset.lang === _lang);
   });
 }
+// 语言切换前保存界面状态（板块/当前股/视图/图类型），reload 后恢复——
+// 用户要求：中英文切换停留在当前页面及状态，不跳回默认首页
+function saveUiState() {
+  try {
+    localStorage.setItem("sf_ui", JSON.stringify({
+      page: currentPage || "analyze",
+      secid: _curSecid || "",
+      name: _curName || "",
+      view: view || "chart",
+      ctype: currentType || "kline",
+      ts: Date.now()
+    }));
+  } catch (e) {}
+}
+function restoreUiState() {
+  let st = null;
+  try { st = JSON.parse(localStorage.getItem("sf_ui") || "null"); } catch (e) { st = null; }
+  try { localStorage.removeItem("sf_ui"); } catch (e) {}
+  if (!st) return;
+  const page = ["analyze", "leaderboard", "fflow", "stats"].includes(st.page) ? st.page : "analyze";
+  if (page !== "analyze") switchPage(page);
+  if (!st.secid) return;
+  const d = getKlineCache(st.secid, "day");
+  if (d) {
+    if (["kline", "kline-week", "kline-month", "ma5", "boll", "vol", "change", "macd", "kdj", "rsi"].includes(st.ctype)) currentType = st.ctype;
+    if (["chart", "fit", "future"].includes(st.view)) view = st.view;
+    setChartData(d, st.name, st.secid);
+  } else {
+    // 缓存未命中（跨天/未下载过）：重新请求恢复当前股
+    doKlineSecid(st.secid, st.name, "day");
+  }
+}
 document.querySelectorAll(".lang-item").forEach(el => {
   el.addEventListener("click", () => {
     if (el.dataset.lang !== _lang) {
       _lang = el.dataset.lang;
       try { localStorage.setItem("sf_lang", _lang); } catch (e) {}
-      location.reload();  // 功能页动态文案多，刷新重渲染最可靠
+      saveUiState();  // 保存当前界面状态，reload 后恢复
+      location.reload();
     }
   });
 });
@@ -2993,21 +3026,50 @@ function showCmpTipAt(xi, tipX, tipY, tipEl) {
   tip.style.top = tipY + "px";
 }
 
-function drawCompare() {
+// 对比图数据切片：按日期范围过滤（默认最近 30 天，不超数据本身范围）
+function cmpSlice(d, secid, from, to) {
+  if (!d || !d.closes || !d.closes.length) return null;
+  let i0 = 0, i1 = d.closes.length - 1;
+  if (from) { while (i0 <= i1 && d.dates[i0] < from) i0++; }
+  if (to)   { while (i1 >= i0 && d.dates[i1] > to) i1--; }
+  if (i1 < i0) return null;
+  return {name: d.name || secid, closes: d.closes.slice(i0, i1 + 1), dates: d.dates.slice(i0, i1 + 1)};
+}
+
+async function drawCompare() {
   const sel = [...document.querySelectorAll("#cmpList input:checked")].map(i => i.value);
   if (!sel.length) { setStatus(t("stSelAtLeast")); return; }
   const from = document.getElementById("cmpFrom").value;
   const to = document.getElementById("cmpTo").value;
-  // 日期范围过滤（默认最近 30 天，不超数据本身范围）
-  let items = sel.map(secid => {
-    const d = cmpDataOf(secid);
-    if (!d || !d.closes || !d.closes.length) return null;
-    let i0 = 0, i1 = d.closes.length - 1;
-    if (from) { while (i0 <= i1 && d.dates[i0] < from) i0++; }
-    if (to)   { while (i1 >= i0 && d.dates[i1] > to) i1--; }
-    if (i1 < i0) return null;
-    return {name: d.name || secid, closes: d.closes.slice(i0, i1 + 1), dates: d.dates.slice(i0, i1 + 1)};
-  }).filter(Boolean);
+  // 先取有日K缓存的；缺失的自选股自动请求数据补齐（用户要求：勾选自选股即可对比，
+  // 无需提前打开过该股图表）
+  let items = [];
+  const missing = [];
+  for (const secid of sel) {
+    const it = cmpSlice(cmpDataOf(secid), secid, from, to);
+    if (it) items.push(it);
+    else missing.push(secid);
+  }
+  if (missing.length) {
+    setStatus(t("stCmpFetching") + " " + missing.join(", ") + " ...");
+    // 请求范围：用户选的对比范围优先，否则用页面默认日期范围
+    const sEl = document.getElementById("startDate"), eEl = document.getElementById("endDate");
+    const s = from || (sEl ? sEl.value : "");
+    const e = to || (eEl ? eEl.value : "");
+    for (const secid of missing) {
+      try {
+        const resp = await fetch("/api/kline?secid=" + encodeURIComponent(secid) +
+                                 "&start=" + encodeURIComponent(s) + "&end=" + encodeURIComponent(e) +
+                                 "&period=day");
+        const data = await resp.json();
+        if (data && data.dates && data.closes && data.closes.length) {
+          setKlineCache(secid, data, "day");
+          const it = cmpSlice(data, secid, from, to);
+          if (it) items.push(it);
+        }
+      } catch (err) { /* 单只失败跳过，能画的照画 */ }
+    }
+  }
   if (items.length < 2) { setStatus(t("stCmpNeed2")); return; }
   const cv = document.getElementById("compareCanvas");
   cv.style.display = "block";
@@ -3862,6 +3924,7 @@ function drawStatsHist(rets) {
   refreshAllQuotes();
   renderAuthArea();  // 绑定登录按钮 / 显示已登录用户名（token 有效时后续自动渲染）
   loadWatchFromCloud();  // 云端自选股同步（服务器 SQLite，本地 localStorage 兜底）
+  restoreUiState();      // 语言切换后恢复：板块/当前股/视图/图类型
 })();
 </script>
 </body>
