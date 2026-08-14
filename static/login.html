@@ -255,6 +255,8 @@ let _lang = "zh";
 try { _lang = localStorage.getItem("sf_lang") || "zh"; } catch (e) { _lang = "zh"; }
 function t(key) { return (I18N[_lang] && I18N[_lang][key]) || key; }
 function applyLang() {
+  // 浏览器原生控件（日期选择器等）跟随 html lang 属性
+  document.documentElement.lang = _lang === "zh" ? "zh-CN" : "en";
   document.querySelectorAll("[data-i18n]").forEach(el => {
     el.textContent = t(el.dataset.i18n);
   });
