@@ -1,5 +1,16 @@
 # 更新报告
 
+## v0.27.0 (2026-08-14)
+- 当前查询股票"重新获取"按钮（用户反馈：当日缓存异常时无法重新获取正确信息）：
+  - 行情分析板块（第一个大板块）当前股票行最右侧新增 🔄 重新获取 按钮
+  - 点击后：清除该股全部 K线缓存（日/周/月）→ 清掉进行中预取 promise → 强制从信息源重新拉取
+    → setChartData 重建图表 → 写新缓存；以缓存是否重建判断成败（成功提示"已重新获取并更新缓存"）
+  - 无当前股时点击提示"请先查询股票"；按钮禁用防重复点击
+  - **中英文双语**：按钮文字/悬浮提示/状态提示全部走 I18N（Refetch / Clear this stock's cache and refetch from source /
+    Refetched and cache updated）；applyLang 新增 data-i18n-title 支持
+  - 验证：静态断言 16 项 + CDP 端到端（中文：旧缓存 44 → 点击 → 新数据 45 写入缓存并更新图表、状态提示；
+    英文：按钮 Refetch、title 英文、状态 "Refetched and cache updated MockShenhua"；无股票时 "请先查询股票"）
+
 ## v0.26.0 (2026-08-14)
 - 中英文切换保留当前页面及状态（用户反馈：切换后不应跳回默认首页）：
   - 切换语言前 saveUiState() 把 板块/当前股/视图/图类型 存入 localStorage（sf_ui）
