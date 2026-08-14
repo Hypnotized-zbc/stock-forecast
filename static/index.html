@@ -245,6 +245,31 @@
   .stat-card .sc-val { font-size: 20px; font-weight: 700; color: #111827; }
   .stats-sub { font-size: 14px; font-weight: 600; color: #374151; margin: 10px 0 8px; }
   #statsChart { display: block; background: #fff; border: 1px solid #f0f0f0; border-radius: 8px; }
+
+  /* ---- v0.29.4 中英文切换布局稳定 ----
+     中英文文案长度差异会导致按钮/模块宽度变化 → 相邻元素位移。
+     统一用 min-width/固定宽度 + 居中 + 固定行高，让两种语言下各元素宽高一致，画面不产生明显移动。 */
+  button { line-height: 20px; }  /* 关键：中文字体(Microsoft YaHei)与英文字体行高不同，不固定会导致按钮高度随语言变化 → 垂直位移 */
+  .lang-switch .lang-item { min-width: 56px; text-align: center; line-height: 20px; }
+  .nav-item { flex: 1; min-width: 0; text-align: center; white-space: nowrap; }
+  .query-row label { min-width: 100px; }
+  .query-row input[type=date] { width: 152px; }
+  #searchBtn, #ffSearchBtn, #stSearchBtn { min-width: 84px; }
+  .tab { min-width: 104px; text-align: center; white-space: nowrap; }
+  #chartType { width: 220px; }
+  #ffDays { min-width: 96px; }
+  #aiBtn, #cmpBtn { min-width: 108px; text-align: center; white-space: nowrap; }
+  #shareBtn { min-width: 120px; text-align: center; white-space: nowrap; }
+  #refetchBtn { min-width: 92px; text-align: center; }
+  .lb-tab { min-width: 116px; text-align: center; white-space: nowrap; }
+  #lbTable th { min-width: 68px; }
+  #lbTable th:first-child { min-width: 36px; }
+  #lbTable th:nth-child(2), #lbTable td.name-cell { min-width: 150px; }
+  .cmp-range input[type="date"] { width: 148px; }
+  #cmpGo { min-width: 110px; text-align: center; }
+  #cmpClose { min-width: 80px; text-align: center; }
+  #chgPwdBtn, #delAccBtn, #logoutBtn { min-width: 132px; text-align: center; white-space: nowrap; }
+  .stat-card .sc-name { min-height: 16px; line-height: 1.35; }
 </style>
 </head>
 <body>
