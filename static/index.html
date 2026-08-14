@@ -712,37 +712,40 @@ function applyLang() {
   document.querySelectorAll(".lang-item").forEach(el => {
     el.classList.toggle("active", el.dataset.lang === _lang);
   });
-}
-// 语言切换前保存界面状态（板块/当前股/视图/图类型），reload 后恢复——
-// 用户要求：中英文切换停留在当前页面及状态，不跳回默认首页
-function saveUiState() {
+
+  // ===== 动态重渲染（v0.28.0：原地切换语言，不 reload、不闪烁、各模块保留内存数据）=====
   try {
-    localStorage.setItem("sf_ui", JSON.stringify({
-      page: currentPage || "analyze",
-      secid: _curSecid || "",
-      name: _curName || "",
-      view: view || "chart",
-      ctype: currentType || "kline",
-      ts: Date.now()
-    }));
-  } catch (e) {}
-}
-function restoreUiState() {
-  let st = null;
-  try { st = JSON.parse(localStorage.getItem("sf_ui") || "null"); } catch (e) { st = null; }
-  try { localStorage.removeItem("sf_ui"); } catch (e) {}
-  if (!st) return;
-  const page = ["analyze", "leaderboard", "fflow", "stats"].includes(st.page) ? st.page : "analyze";
-  if (page !== "analyze") switchPage(page);
-  if (!st.secid) return;
-  const d = getKlineCache(st.secid, "day");
-  if (d) {
-    if (["kline", "kline-week", "kline-month", "ma5", "boll", "vol", "change", "macd", "kdj", "rsi"].includes(st.ctype)) currentType = st.ctype;
-    if (["chart", "fit", "future"].includes(st.view)) view = st.view;
-    setChartData(d, st.name, st.secid);
-  } else {
-    // 缓存未命中（跨天/未下载过）：重新请求恢复当前股
-    doKlineSecid(st.secid, st.name, "day");
+    renderWatchlist();
+    if (D && n) {
+      if (view === "fit") { renderFitPanel(); drawFit(); }
+      else if (view === "future") { renderFuturePanel(); drawFuture(); }
+      else paint(currentType);
+    }
+    // 排行榜：数据保留在 _lbData，直接重渲染（不重新 fetch，切换不丢数据）
+    if (currentPage === "leaderboard" && _lbData && _lbData.items) { renderLeaderboard(); renderLbTs(); }
+    // 资金流向：数据保留在 _ffData，直接重渲染（不重新 fetch，切换不丢数据）
+    if (currentPage === "fflow" && _ffData && _ffData.length) renderFflowContent();
+    // 历史统计：基于当前股数据重算
+    if (currentPage === "stats") renderStats();
+    // AI 解读面板：开着且当前股有缓存 → 按新语言重新渲染标题与正文
+    if (_aiPanelOpen && D && n) {
+      const panel = document.getElementById("aiPanel");
+      const ck = aiCacheKey();
+      if (aiCacheValid(_aiCache[ck])) {
+        panel.innerHTML = aiTitleHtml() + esc(_aiCache[ck].text).replace(/\n/g, "<br>");
+      } else if (!panel.innerHTML) {
+        panel.innerHTML = aiTitleHtml() + "<div style='color:#9ca3af'>" + t("aiWaiting") + "</div>";
+      }
+    }
+    // 对比 overlay：开着 → 刷新候选列表/可用范围提示并重绘对比图
+    const cov = document.getElementById("compareOverlay");
+    if (cov && cov.style.display === "flex") {
+      cmpOpenRefresh();
+      if (_cmpState) drawCompare();
+    }
+    refreshAllQuotes();
+  } catch (e) {
+    try { console.error("applyLang 动态重渲染:", e); } catch (e2) {}
   }
 }
 document.querySelectorAll(".lang-item").forEach(el => {
@@ -750,8 +753,7 @@ document.querySelectorAll(".lang-item").forEach(el => {
     if (el.dataset.lang !== _lang) {
       _lang = el.dataset.lang;
       try { localStorage.setItem("sf_lang", _lang); } catch (e) {}
-      saveUiState();  // 保存当前界面状态，reload 后恢复
-      location.reload();
+      applyLang();  // 原地切换：静态 + 动态全量重渲染，不 reload、不闪烁
     }
   });
 });
@@ -3334,9 +3336,11 @@ document.getElementById("cmpTip").addEventListener("mousedown", e => {
   window.addEventListener("mouseup", onUp);
 });
 
-document.getElementById("cmpBtn").addEventListener("click", () => {
+// 对比 overlay 内容刷新（候选列表 + 可用范围提示）——语言切换时复用：
+// 保留用户已勾选的 checkbox 与画布状态，只重建带新语言的列表
+function cmpOpenRefresh() {
   const list = cmpCandidates();
-  if (!list.length) { setStatus(t("stCmpNone")); return; }
+  if (!list.length) return;
   // 默认日期范围：各股票数据并集范围，默认取最近 30 天
   let minD = null, maxD = null;
   for (const c of list) {
@@ -3357,10 +3361,19 @@ document.getElementById("cmpBtn").addEventListener("click", () => {
     document.getElementById("cmpRangeTip").textContent = t("cmpAvailRange") + " " + minD + " ~ " + maxD;
   }
   const box = document.getElementById("cmpList");
-  box.innerHTML = list.map((c, i) =>
-    "<label class='cmp-item'><input type='checkbox' value='" + c.secid + "' " + (i < 2 ? "checked" : "") + ">" +
-    esc(c.name) + " <span style='color:#999'>" + esc(c.secid) + "</span></label>"
-  ).join("");
+  // 已有勾选 → 按勾选恢复；首次打开 → 默认勾选前两只
+  const prev = new Set([...box.querySelectorAll("input:checked")].map(i => i.value));
+  box.innerHTML = list.map((c, i) => {
+    let checked = "";
+    if (prev.size) checked = prev.has(c.secid) ? "checked" : "";
+    else if (i < 2) checked = "checked";
+    return "<label class='cmp-item'><input type='checkbox' value='" + c.secid + "' " + checked + ">" +
+           esc(c.name) + " <span style='color:#999'>" + esc(c.secid) + "</span></label>";
+  }).join("");
+}
+document.getElementById("cmpBtn").addEventListener("click", () => {
+  cmpOpenRefresh();
+  if (!document.getElementById("cmpList").childElementCount) { setStatus(t("stCmpNone")); return; }
   document.getElementById("compareOverlay").style.display = "flex";
   document.getElementById("compareCanvas").style.display = "none";
   _cmpSize = null;  // 重新打开时重算画布尺寸
@@ -3558,13 +3571,17 @@ async function loadLeaderboard() {
     if (data.error) { body.innerHTML = "<tr><td colspan='12' style='text-align:center;color:#c0392b'>" + esc(data.error === "lb_unavailable" ? t("lbUnavailable") : data.error) + "</td></tr>"; return; }
     _lbData = data;
     renderLeaderboard();
-    document.getElementById("lbTs").textContent = fmtTime(Date.now()) +
-      (_lbData.source === "sina" ? " · [" + t("dataSrcSina") + "]" : "") +
-      (_lbData.cached ? " · " + t("ffCacheTip").replace("{ts}", _lbData.cache_ts || "") : "") +
-      (_lbData.stale ? " " + t("lbCacheStale") : "");
+    renderLbTs();
   } catch (e) {
     body.innerHTML = "<tr><td colspan='12' style='text-align:center;color:#c0392b'>" + esc(t("stReqErr")) + esc(e) + "</td></tr>";
   }
+}
+// 排行榜时间戳行（含数据源/缓存/过期标记）——语言切换时用 _lbData 重渲染
+function renderLbTs() {
+  document.getElementById("lbTs").textContent = fmtTime(Date.now()) +
+    (_lbData.source === "sina" ? " · [" + t("dataSrcSina") + "]" : "") +
+    (_lbData.cached ? " · " + t("ffCacheTip").replace("{ts}", _lbData.cache_ts || "") : "") +
+    (_lbData.stale ? " " + t("lbCacheStale") : "");
 }
 function renderLeaderboard() {
   const body = document.getElementById("lbTable").querySelector("tbody");
@@ -3610,6 +3627,7 @@ document.querySelectorAll(".lb-tab").forEach(el => {
 // ================= 板块三：资金流向 =================
 let _ffData = null;
 let _ffName = "";
+let _ffMeta = {};  // 资金流元信息（days/source/cached/cache_ts/stale），语言切换重渲染用
 
 // 通用股票搜索（资金流向/历史统计板块共用）：输入 → /api/search → 候选按钮
 async function doStockSearch(inputId, candId, statusId, candKey, onPick) {
@@ -3663,28 +3681,34 @@ async function loadFflow(secid, name) {
     }
     _ffData = data.items;
     _ffName = name || secid;
-    let title = esc(_ffName) + " · " + t("ffOk").replace("{days}", data.days);
-    if (data.source === "sina") {
-      title += " <span style='color:#6b7280;font-weight:400;font-size:12px'>[" + esc(t("dataSrcSina")) + "]</span>";
-    }
-    if (data.cached) {
-      const ts = data.cache_ts || "";
-      title += "<span style='color:#f59e0b;font-weight:400;font-size:12px'> " +
-        esc(t("ffCacheTip").replace("{ts}", ts)) + "</span>";
-    }
-    if (data.stale) {
-      title += "<span style='color:#f59e0b;font-weight:400;font-size:12px'> " + esc(t("lbCacheStale")) + "</span>";
-    }
-    document.getElementById("ffTitle").innerHTML = title;
-    document.getElementById("ffChart").style.display = "block";
-    document.getElementById("ffTable").style.display = "";
-    drawFflow();
-    renderFfTable();
-    document.getElementById("ffFoot").textContent = t("ffFoot");
+    _ffMeta = {days: data.days, source: data.source, cached: data.cached, cache_ts: data.cache_ts, stale: data.stale};
+    renderFflowContent();
     document.getElementById("ffStatus").textContent = "";
   } catch (e) {
     document.getElementById("ffStatus").textContent = t("stReqErr") + e;
   }
+}
+// 资金流向内容渲染（标题/图表/表格/脚注）——语言切换时用 _ffData + _ffMeta 直接重渲染，不重新 fetch
+function renderFflowContent() {
+  if (!_ffData || !_ffData.length) return;
+  let title = esc(_ffName) + " · " + t("ffOk").replace("{days}", _ffMeta.days);
+  if (_ffMeta.source === "sina") {
+    title += " <span style='color:#6b7280;font-weight:400;font-size:12px'>[" + esc(t("dataSrcSina")) + "]</span>";
+  }
+  if (_ffMeta.cached) {
+    const ts = _ffMeta.cache_ts || "";
+    title += "<span style='color:#f59e0b;font-weight:400;font-size:12px'> " +
+      esc(t("ffCacheTip").replace("{ts}", ts)) + "</span>";
+  }
+  if (_ffMeta.stale) {
+    title += "<span style='color:#f59e0b;font-weight:400;font-size:12px'> " + esc(t("lbCacheStale")) + "</span>";
+  }
+  document.getElementById("ffTitle").innerHTML = title;
+  document.getElementById("ffChart").style.display = "block";
+  document.getElementById("ffTable").style.display = "";
+  drawFflow();
+  renderFfTable();
+  document.getElementById("ffFoot").textContent = t("ffFoot");
 }
 function loadFflowPanel() {
   // 进入板块：若行情分析已查过股票但本页没加载过，自动加载；否则保留已有内容
@@ -3963,7 +3987,6 @@ function drawStatsHist(rets) {
   refreshAllQuotes();
   renderAuthArea();  // 绑定登录按钮 / 显示已登录用户名（token 有效时后续自动渲染）
   loadWatchFromCloud();  // 云端自选股同步（服务器 SQLite，本地 localStorage 兜底）
-  restoreUiState();      // 语言切换后恢复：板块/当前股/视图/图类型
 })();
 </script>
 </body>

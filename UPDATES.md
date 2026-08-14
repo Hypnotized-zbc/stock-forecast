@@ -1,5 +1,20 @@
 # 更新报告
 
+## v0.28.0 (2026-08-14)
+- 中英文原地切换（用户反馈：切换不应闪烁至首页再切回；尝试直接在当前页面切换）：
+  - 语言切换不再 location.reload()，改为 applyLang() 原地全量重渲染（不闪烁、不白屏）
+  - applyLang 扩展：静态 data-i18n 文案 + 动态重渲染（图表/拟合/预测、自选股、当前页模块、AI 面板、对比 overlay）
+  - 移除 saveUiState/restoreUiState reload 恢复机制（原地切换后不再需要）
+- 其他模块切换语言保留当前数据（用户反馈：不想切换后重新点击/重新查询）：
+  - 排行榜：数据保留在 _lbData，切换时 renderLeaderboard + renderLbTs 直接重渲染（不重新 fetch）
+  - 资金流向：loadFflow 拆分 renderFflowContent（用 _ffData + 新增 _ffMeta 重渲染标题/图表/表格/脚注，不重新 fetch）
+  - 历史统计：renderStats 基于当前股数据重算
+  - AI 解读面板：开着且有缓存 → 按新语言重新渲染标题与正文
+  - 对比 overlay：拆分 cmpOpenRefresh（候选列表/可用范围提示），保留用户已勾选的 checkbox 与画布状态后重绘
+- 验证：静态断言 12 项 + CDP 端到端（排行榜页切英文：href 不变不 reload、仍在排行榜、rows=100 保留、
+  当前股保留、导航变 Leaderboard；切回中文全保留；资金流切英文 rows=30 保留且标题/新浪源/缓存标记全英文；
+  对比 overlay 切英文：overlay 保留、勾选保留、提示 "Available range"）
+
 ## v0.27.0 (2026-08-14)
 - 当前查询股票"重新获取"按钮（用户反馈：当日缓存异常时无法重新获取正确信息）：
   - 行情分析板块（第一个大板块）当前股票行最右侧新增 🔄 重新获取 按钮
