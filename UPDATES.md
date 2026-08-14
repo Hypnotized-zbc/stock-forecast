@@ -1,5 +1,17 @@
 # 更新报告
 
+## v0.29.2 (2026-08-14)
+- 当前查询右侧标题区（trading days 等字样）随语言切换第一时间刷新（用户反馈：切换后不刷新，
+  需切页面手动刷新，有时还会卡住）：
+  - 根因：rangeInfo（含"共 N 个交易日 / N trading days"）与 curStock 标题是 setChartData 设置的，
+    applyLang 动态重渲染没覆盖 → 切语言后旧文案残留
+  - 修复：提取 renderCurHeader()（curStock + rangeInfo 渲染），setChartData 与 applyLang 共用；
+    applyLang 里标题区最先刷新（即使后续图表渲染慢/异常也已更新）
+  - 卡顿优化：applyLang 只在主页面（analyze）重绘图表；其他模块页的图表靠 switchPage 返回时重绘，
+    避免在隐藏 canvas 上无谓重绘
+  - 验证：CDP 端到端（中文"共 30 个交易日" → 切英文立即 "30 trading days" → 切回中文立即恢复；
+    排行榜页切换不卡、返回主页面正常）
+
 ## v0.29.1 (2026-08-14)
 - 右上角"修改密码/注销账号/退出"按钮随中英文切换（用户反馈：切换语言后按钮不更新）：
   - 根因：renderAuthArea 动态生成的三个按钮没带 data-i18n 属性，applyLang 静态更新管不到

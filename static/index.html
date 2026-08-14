@@ -715,8 +715,12 @@ function applyLang() {
 
   // ===== 动态重渲染（v0.28.0：原地切换语言，不 reload、不闪烁、各模块保留内存数据）=====
   try {
+    // 当前股标题区最先刷新（tradingDays 等文案），即使后续图表渲染慢/异常也已更新
+    renderCurHeader();
     renderWatchlist();
-    if (D && n) {
+    // 主页面（行情分析）才重绘图表；其他模块页的图表靠 switchPage 返回时重绘，
+    // 避免在隐藏 canvas 上无谓重绘造成卡顿
+    if (currentPage === "analyze" && D && n) {
       if (view === "fit") { renderFitPanel(); drawFit(); }
       else if (view === "future") { renderFuturePanel(); drawFuture(); }
       else paint(currentType);
@@ -2140,6 +2144,17 @@ function startQuoteTimer() {
   _quoteTimer = setInterval(refreshAllQuotes, 30000);
 }
 
+// 当前股标题区（curStock + rangeInfo）——独立渲染供 setChartData 与语言切换 applyLang 共用：
+// 切换语言时 tradingDays 等文案立即刷新，不需要切页面手动刷新
+function renderCurHeader() {
+  if (!D || !n) return;
+  const code = String(_curSecid || "").split(".")[1] || "";
+  document.getElementById("curStock").innerHTML =
+    esc(_curName || "—") + "<span class='code'>" + esc(code) + "</span>";
+  document.getElementById("rangeInfo").textContent =
+    (_curName || "") + " | " + D.dates[0] + " ~ " + D.dates[n-1] + " | " + t("tradingDays").replace("{n}", n);
+}
+
 function setChartData(data, name, secid) {
   D = data;
   n = D.dates.length;
@@ -2148,13 +2163,7 @@ function setChartData(data, name, secid) {
   const dataName = (data.name || "").trim();
   const goodName = dataName && !/^[a-z]{2}\d{6}$/.test(dataName) ? dataName : (name || "");
   _curName = goodName;
-  // 当前查询股票标题：名称 + 代码（涨跌幅已删除——依赖自选股数据行，未登录/不在自选股时
-  // 永远显示 —，用户多次反馈"显示不出来"，删除不再显示）
-  const code = String(secid || "").split(".")[1] || "";
-  document.getElementById("curStock").innerHTML =
-    esc(_curName || "—") + "<span class='code'>" + esc(code) + "</span>";
-  document.getElementById("rangeInfo").textContent =
-    (_curName || name || "") + " | " + D.dates[0] + " ~ " + D.dates[n-1] + " | " + t("tradingDays").replace("{n}", n);
+  renderCurHeader();
   // 注意：不清空 candidateBox——候选选项在加入自选股/重新搜索前保持显示，避免闪烁消失
   setStatus(t("stDone"));
   // 按当前视图完整重绘：仅 paint 只更新行情图，模型拟合/未来预测视图的
