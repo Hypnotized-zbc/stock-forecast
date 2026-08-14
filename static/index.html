@@ -2366,9 +2366,9 @@ function renderAuthArea() {
   const area = document.getElementById("authArea");
   if (_username) {
     area.innerHTML = "<span style='color:#4b5563'>👤 " + esc(_username) + "</span> " +
-      "<button id='chgPwdBtn' style='padding:3px 10px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;margin-left:6px'>" + t("chgPwd") + "</button>" +
-      "<button id='delAccBtn' style='padding:3px 10px;border:1px solid #fecaca;border-radius:6px;background:#fff;color:#dc2626;cursor:pointer;margin-left:6px'>" + t("delAcc") + "</button>" +
-      "<button id='logoutBtn' style='padding:3px 10px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;margin-left:6px'>" + t("stLogout") + "</button>";
+      "<button id='chgPwdBtn' data-i18n='chgPwd' style='padding:3px 10px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;margin-left:6px'>" + t("chgPwd") + "</button>" +
+      "<button id='delAccBtn' data-i18n='delAcc' style='padding:3px 10px;border:1px solid #fecaca;border-radius:6px;background:#fff;color:#dc2626;cursor:pointer;margin-left:6px'>" + t("delAcc") + "</button>" +
+      "<button id='logoutBtn' data-i18n='stLogout' style='padding:3px 10px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;margin-left:6px'>" + t("stLogout") + "</button>";
     document.getElementById("chgPwdBtn").addEventListener("click", openChgPwd);
     document.getElementById("delAccBtn").addEventListener("click", openDelAcc);
     document.getElementById("logoutBtn").addEventListener("click", () => {
@@ -3675,6 +3675,7 @@ async function loadFflow(secid, name) {
       document.getElementById("ffStatus").innerHTML =
         "<span style='color:#c0392b'>" + esc(t("ffNoCache")) + "</span> " +
         "<button onclick='loadFflow(\"" + esc(secid) + "\",\"" + esc(name || "") + "\")' " +
+        "data-i18n='ffRetry' " +
         "style='padding:2px 12px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;font-size:12px'>" + esc(t("ffRetry")) + "</button>";
       return;
     }

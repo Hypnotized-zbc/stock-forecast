@@ -1,5 +1,13 @@
 # 更新报告
 
+## v0.29.1 (2026-08-14)
+- 右上角"修改密码/注销账号/退出"按钮随中英文切换（用户反馈：切换语言后按钮不更新）：
+  - 根因：renderAuthArea 动态生成的三个按钮没带 data-i18n 属性，applyLang 静态更新管不到
+  - 修复：chgPwdBtn/delAccBtn/logoutBtn 加 data-i18n（chgPwd/delAcc/stLogout），切换语言时自动更新文本
+  - 顺手修复：资金流加载失败的重试按钮（ffRetry）同样加 data-i18n
+  - 验证：CDP 端到端（中文 修改密码/注销账号/退出 → 英文 Change Password/Delete Account/Sign out → 切回中文正常）
+- 版本号策略：恢复小版本递增（0.29.x），不再整级跳大版本
+
 ## v0.29.0 (2026-08-14)
 - 查询候选"加入自选股"按钮随中英文切换（用户反馈：切换语言后按钮不更新，需重新点击查询）：
   - 根因：候选列表是动态 innerHTML 生成的，按钮没有 data-i18n 属性，applyLang 静态更新管不到
