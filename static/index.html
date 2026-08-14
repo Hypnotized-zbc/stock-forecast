@@ -349,7 +349,7 @@
         <tr>
           <th>#</th><th data-i18n="wlHeadName">名称</th><th data-i18n="wlHeadPrice">最新价</th>
           <th data-i18n="lbChgPct">涨跌幅</th><th data-i18n="lbChg">涨跌额</th><th data-i18n="lbVolume">成交量</th>
-          <th data-i18n="lbAmountCol">成交额</th><th data-i18n="lbTurnoverCol">换手率</th><th data-i18n="lbVolratioCol">量比</th>
+          <th data-i18n="lbAmountCol">成交额</th><th data-i18n="lbTurnoverCol">换手率</th>
           <th data-i18n="wlHeadPe">PE</th><th data-i18n="wlHeadPb">PB</th><th data-i18n="wlHeadCap">总市值</th>
         </tr>
       </thead>
@@ -1990,7 +1990,7 @@ async function doSearch() {
     if (!data.length) { setStatus(t("stNotFound")); return; }
     box.innerHTML = data.map((c, i) =>
       "<button class='cand' data-i='" + i + "'>" + esc(c["名称"]) + " " + esc(c["代码"]) + " " + esc(c["市场"]) + "</button>" +
-      "<button class='wl-add' data-i='" + i + "'>" + esc(t("stAddWatch")) + "</button>"
+      "<button class='wl-add' data-i='" + i + "' data-i18n='stAddWatch'>" + esc(t("stAddWatch")) + "</button>"
     ).join("");
     window._cands = data;
     setStatus(t("stCandidatesPre") + data.length + t("stCandidates"));
@@ -3564,16 +3564,16 @@ let _lbKind = "up";
 let _lbData = null;
 async function loadLeaderboard() {
   const body = document.getElementById("lbTable").querySelector("tbody");
-  body.innerHTML = "<tr><td colspan='12' style='text-align:center;color:#9ca3af'>" + esc(t("lbLoading")) + "</td></tr>";
+  body.innerHTML = "<tr><td colspan='11' style='text-align:center;color:#9ca3af'>" + esc(t("lbLoading")) + "</td></tr>";
   try {
     const resp = await fetch("/api/leaderboard?kind=" + _lbKind);
     const data = await resp.json();
-    if (data.error) { body.innerHTML = "<tr><td colspan='12' style='text-align:center;color:#c0392b'>" + esc(data.error === "lb_unavailable" ? t("lbUnavailable") : data.error) + "</td></tr>"; return; }
+    if (data.error) { body.innerHTML = "<tr><td colspan='11' style='text-align:center;color:#c0392b'>" + esc(data.error === "lb_unavailable" ? t("lbUnavailable") : data.error) + "</td></tr>"; return; }
     _lbData = data;
     renderLeaderboard();
     renderLbTs();
   } catch (e) {
-    body.innerHTML = "<tr><td colspan='12' style='text-align:center;color:#c0392b'>" + esc(t("stReqErr")) + esc(e) + "</td></tr>";
+    body.innerHTML = "<tr><td colspan='11' style='text-align:center;color:#c0392b'>" + esc(t("stReqErr")) + esc(e) + "</td></tr>";
   }
 }
 // 排行榜时间戳行（含数据源/缓存/过期标记）——语言切换时用 _lbData 重渲染
@@ -3586,7 +3586,7 @@ function renderLbTs() {
 function renderLeaderboard() {
   const body = document.getElementById("lbTable").querySelector("tbody");
   if (!_lbData || !_lbData.items || !_lbData.items.length) {
-    body.innerHTML = "<tr><td colspan='12' style='text-align:center;color:#9ca3af'>-</td></tr>";
+    body.innerHTML = "<tr><td colspan='11' style='text-align:center;color:#9ca3af'>-</td></tr>";
     return;
   }
   body.innerHTML = _lbData.items.map(r => {
@@ -3601,7 +3601,6 @@ function renderLeaderboard() {
       "<td>" + fmtVolume(r.volume) + "</td>" +
       "<td>" + fmtSigned(r.amount) + "</td>" +
       "<td>" + (r.turnover == null ? "-" : r.turnover.toFixed(2) + "%") + "</td>" +
-      "<td>" + (r.volratio == null ? "-" : r.volratio.toFixed(2)) + "</td>" +
       "<td>" + (r.pe == null ? "-" : r.pe.toFixed(2)) + "</td>" +
       "<td>" + (r.pb == null ? "-" : r.pb.toFixed(2)) + "</td>" +
       "<td>" + fmtAmount(r.mktcap) + "</td>" +
@@ -3645,7 +3644,7 @@ async function doStockSearch(inputId, candId, statusId, candKey, onPick) {
     box.innerHTML = data.map((c, i) =>
       "<span class='cand-row'>" +
       "<button class='cand' data-i='" + i + "'>" + esc(c["名称"]) + " " + esc(c["代码"]) + "</button>" +
-      "<button class='wl-add' data-i='" + i + "'>" + esc(t("stAddWatch")) + "</button></span>"
+      "<button class='wl-add' data-i='" + i + "' data-i18n='stAddWatch'>" + esc(t("stAddWatch")) + "</button></span>"
     ).join("");
     box.querySelectorAll(".cand").forEach(btn => {
       btn.addEventListener("click", () => {
