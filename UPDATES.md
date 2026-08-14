@@ -1,13 +1,5 @@
 # 更新报告
 
-## v0.29.3 (2026-08-14)
-- 日期选择器"年月日/清除/今天"等原生文案随语言切换（用户反馈：所有日期选择都受影响，含主页面与多股对比）：
-  - 根因：这些是浏览器原生 date input 弹层文案，跟随 html lang 属性；页面 lang 写死 zh-CN，JS 无法直接改弹层
-  - 修复：applyLang 同步 document.documentElement.lang（zh-CN ↔ en），全局一个属性覆盖所有日期框
-    （startDate/endDate/cmpFrom/cmpTo 等全部生效）；index.html 与 login.html 都加
-  - 顺手：document.title 随语言切换（股票历史数据查询 ↔ Stock History Data Query）
-  - 验证：CDP 端到端（zh-CN/股票历史数据查询 → en/Stock History Data Query → 切回中文恢复）
-
 ## v0.29.2 (2026-08-14)
 - 当前查询右侧标题区（trading days 等字样）随语言切换第一时间刷新（用户反馈：切换后不刷新，
   需切页面手动刷新，有时还会卡住）：

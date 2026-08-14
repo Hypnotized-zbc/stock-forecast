@@ -700,10 +700,6 @@ function esc(s) {
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 function applyLang() {
-  // 浏览器原生日期选择器（年月日/清除/今天）跟随 html lang 属性，切语言时同步；
-  // 页面标题同样双语
-  document.documentElement.lang = _lang === "zh" ? "zh-CN" : "en";
-  try { document.title = t("appTitle"); } catch (e) {}
   document.querySelectorAll("[data-i18n]").forEach(el => {
     el.textContent = t(el.dataset.i18n);
   });
