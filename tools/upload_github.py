@@ -23,9 +23,10 @@ OWNER_DEFAULT = "Hypnotized-zbc"
 REPO_DEFAULT = "stock-forecast"
 BRANCH = "main"
 
-# 自动扫描时排除的目录 / 扩展名
-EXCLUDE_DIRS = {".git", "backups", "data", "__pycache__", "output", "node_modules"}
-EXCLUDE_EXT = {".pyc", ".png", ".jpg", ".pdf"}
+# 自动扫描时排除的目录 / 扩展名 / 精确文件名（与 .gitignore 对齐，敏感文件不上传）
+EXCLUDE_DIRS = {".git", "backups", "data", "__pycache__", ".pytest_cache", "output", "node_modules"}
+EXCLUDE_EXT = {".pyc", ".png", ".jpg", ".pdf", ".db", ".db-wal", ".db-shm"}
+EXCLUDE_FILES = {"llm_key.txt", "stock_forecast.db", "stock_forecast.db-wal", "stock_forecast.db-shm"}
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -45,7 +46,8 @@ def api(session, method: str, url: str, **kwargs):
 
 
 def scan_files() -> list:
-    """扫描项目目录下所有应上传的文件（相对路径，排序保证稳定）。"""
+    """扫描项目目录下所有应上传的文件（相对路径，排序保证稳定）。
+    排除：EXCLUDE_DIRS 目录、EXCLUDE_EXT 扩展名、EXCLUDE_FILES 精确文件名。"""
     files = []
     for p in sorted(ROOT.rglob("*")):
         if not p.is_file():
@@ -54,6 +56,8 @@ def scan_files() -> list:
         if any(part in EXCLUDE_DIRS for part in p.relative_to(ROOT).parts):
             continue
         if p.suffix in EXCLUDE_EXT:
+            continue
+        if p.name in EXCLUDE_FILES:
             continue
         files.append(rel)
     return files
