@@ -1,22 +1,33 @@
 # -*- coding: utf-8 -*-
 """
-crawler_stock.py — 股票历史数据查询 + 图表（单文件 Web 应用）
-===============================================================
-启动后自动打开浏览器页面：
-    页面上方"查询股票："输入框 → 输入名称/代码 → 选择候选 →
-    在同一个页面显示 K线/MA5/BOLL/成交量/涨跌幅 图表（下拉切换）。
+backend.py — 股票历史数据查询与预测网站 · 后端（标准库 HTTP 服务）
+====================================================================
+启动入口：python3 app.py（本文件为全部后端逻辑：路由、数据源、指标、
+预测模型、认证与安全、AI 解读，前端页面在 static/）。
+
+功能范围：
+- 行情：搜索 / K 线（日/周/月）/ 实时行情（自选股 30s 统一刷新）
+- 指标数据：MA5 / BOLL / MACD / KDJ / RSI 等（前端 Canvas 绘制）
+- 预测：ARIMA / ETS / Prophet(轻量) / SVR / 随机森林 五模型拟合 + 未来 10 日预测，
+  RMSE 逆加权合成（纯 Python 数值实现，零科学计算库）
+- 四大板块：行情分析 / 排行榜 / 资金流向 / 历史统计
+- 用户体系：注册/登录（图形验证码 + 滑块人机验证）、PBKDF2-SHA256 加盐哈希、
+  7 天会话（sessions 表持久化）、修改密码 / 注销 / 忘记密码
+- 安全：IP 限速、请求体/并发上限、CSP 等安全响应头、前端输出转义（XSS）
+- AI 解读：DeepSeek /api/insight（趋势 / 支撑压力 / 风险，中英分语言缓存）
 
 技术要点：
-- 本地 HTTP 服务（标准库 http.server，无第三方框架），绑定 127.0.0.1 随机端口
-- 页面与后端同源：浏览器 fetch /api/search、/api/kline，后端转发东财/新浪接口
-  （浏览器直连东财会被 CORS 拦，本地后端中转绕过）
-- 图表为原生 Canvas 绘制，单页面内完成查询与结果展示，不刷新跳转
-- 数据源：东方财富（主）+ 新浪（备用，东财断连自动切换）
-- 关闭浏览器页面即自动停止本地服务（页面卸载时 sendBeacon 通知）
+- 纯标准库 http.server（ThreadingHTTPServer），无第三方 Web 框架；仅依赖 requests
+- 数据源多级降级：东方财富（主）→ 新浪（备）→ 腾讯（备）；当日磁盘缓存优先，
+  接口全挂时返回过期缓存并标注 stale（cached=true）
+- 约 16 个 REST API（/api/search、/api/kline、/api/quotes、/api/insight、
+  /api/leaderboard、/api/fflow、/api/login、/api/watchlist …）
+- 部署：STOCK_HOST / STOCK_PORT 环境变量（公网 0.0.0.0:8000）、systemd 单元、
+  数据库与代码目录分离 + 启动自动备份；详见 README.md
 
 运行方式：
-    python3 crawler_stock.py
-    浏览器自动打开 http://127.0.0.1:<port>/
+    python3 app.py        # 本地：自动打开浏览器，关页面 30s 后自动停服
+    STOCK_HOST=0.0.0.0 STOCK_PORT=8000 python3 app.py   # 公网模式（不自动停止）
 
 依赖：requests（其余全用标准库 + 浏览器自带 Canvas）
 """

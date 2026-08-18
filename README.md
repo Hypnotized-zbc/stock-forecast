@@ -125,8 +125,8 @@ sudo systemctl enable --now stock-forecast
 ./tools/backup_db.sh nightly    # 可加备注
 # 建议 crontab：0 3 * * * /path/to/stock-forecast/tools/backup_db.sh nightly
 ```
-数据库文件路径可用 `STOCK_DB` 覆盖；四张表：`users` 用户、`watchlist` 自选股、
-`ai_cache` AI解读缓存、`history` 查询历史。
+数据库文件路径可用 `STOCK_DB` 覆盖；五张表：`users` 用户、`sessions` 会话、
+`watchlist` 自选股、`ai_cache` AI 解读缓存、`history` 查询历史。
 
 ---
 
@@ -165,13 +165,12 @@ stock-forecast/
 ├── tools/              # 工具（GitHub 上传 / 数据库备份）
 ├── tests/test_backend.py  # pytest 单元测试
 ├── backups/            # 每次改动前的版本备份 + 数据库备份
-├── data/               # K 线 CSV 留档（自动生成）
-├── crawler/ examples/  # 早期爬虫/示例代码（保留供参考，主程序不依赖）
+├── data/               # K 线 CSV 留档 + 接口磁盘缓存（自动生成）
 └── stock_forecast.db   # 用户数据（自动生成，gitignore）
 ```
 
-> 说明：`crawler/`（早期公告爬虫）与 `examples/`（演示脚本）是开发历史遗留，
-> 与本 Web 应用运行无关，保留仅供参考，可自行删除。
+> 说明：早期爬虫目录 `crawler/` 与示例目录 `examples/` 属开发历史遗留、与本应用
+> 运行无关，已在 v0.29.8 清理删除。
 
 ---
 

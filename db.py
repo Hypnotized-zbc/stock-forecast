@@ -3,11 +3,12 @@
 """
 数据库模块（SQLite，标准库，零依赖）
 =====================================
-四张表：
-- users     : 用户账号（user_id, username, password_hash, salt, created_at）
+五张表：
+- users     : 用户账号（user_id, username, password_hash, salt, email, created_at）
+- sessions  : 登录会话（token, user_id, expire_ts, created_at），服务重启后保持登录
 - watchlist : 自选股列表（user_id, secid, name, added_at）
 - ai_cache  : AI 解读缓存（user_id, secid, period, text, ts）
-- history   : 查询历史（user_id, secid, name, ts）
+- history   : 查询历史（id, user_id, secid, name, ts）
 
 用户数据按 user_id 隔离（多用户）。密码存储为加盐哈希，不存明文。
 数据库文件默认项目目录 stock_forecast.db，可用环境变量 STOCK_DB 覆盖。
